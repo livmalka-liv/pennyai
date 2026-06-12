@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-main: #0B0E14;
+  --color-bg-surface: #131A26;
+  --color-bg-elevated: #1A2333;
+  --color-border-subtle: #1E293B;
+  --color-border-muted: #263147;
+
+  --color-brand: #6366F1;
+  --color-brand-hover: #4F46E5;
+  --color-neon-green: #10B981;
+  --color-neon-green-dim: #059669;
+  --color-neon-red: #EF4444;
+  --color-neon-red-dim: #DC2626;
+  --color-violet: #8B5CF6;
+
+  --color-text-main: #F8FAFC;
+  --color-text-muted: #94A3B8;
+  --color-text-dim: #64748B;
+
+  --font-sans: 'Inter', system-ui, sans-serif;
+
+  --radius-card: 12px;
+  --radius-btn: 8px;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  background-color: #0B0E14;
+  color: #F8FAFC;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0B0E14;
+}
+::-webkit-scrollbar-thumb {
+  background: #1E293B;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #263147;
+}
+
+/* Glassmorphic card utility */
+.glass-card {
+  background: rgba(19, 26, 38, 0.6);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid #1E293B;
+  border-radius: 12px;
+}
+
+/* Neon glow effects */
+.glow-green {
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.15);
+}
+.glow-brand {
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.2);
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #6366F1 0%, #8B5CF6 50%, #10B981 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Equity curve glow line (for SVG/Recharts) */
+.recharts-line path {
+  filter: drop-shadow(0 0 6px rgba(16, 185, 129, 0.6));
+}
