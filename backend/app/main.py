@@ -32,6 +32,7 @@ app.include_router(data_router, prefix="/api/v1")
 
 
 @app.get("/health")
+@app.get("/בריאות")
 async def health():
     return {
         "status": "ok",
