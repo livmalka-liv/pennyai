@@ -324,6 +324,14 @@ export default function ChatPanel({
   );
 }
 
+const SL_PRESETS = [3, 5, 7, 10];
+const RR_RATIOS = [
+  { label: "1:1", value: 1 },
+  { label: "1:1.5", value: 1.5 },
+  { label: "1:2", value: 2 },
+  { label: "1:3", value: 3 },
+];
+
 function ConfirmationBlock({
   strategy,
   lookbackYears,
@@ -333,11 +341,9 @@ function ConfirmationBlock({
   lookbackYears: LookbackYears;
   onRun: (tpPct: number, slPct: number) => void;
 }) {
-  const [tp, setTp] = useState("15");
-  const [sl, setSl] = useState("5");
-  const tpNum = parseFloat(tp);
-  const slNum = parseFloat(sl);
-  const canRun = tp !== "" && sl !== "" && !isNaN(tpNum) && !isNaN(slNum) && tpNum > 0 && slNum > 0;
+  const [sl, setSl] = useState(5);
+  const [ratio, setRatio] = useState(2);
+  const tp = Math.round(sl * ratio * 10) / 10;
 
   const displayRules = strategy.rules.filter(r => r.type !== "exit");
 
@@ -357,39 +363,53 @@ function ConfirmationBlock({
           </div>
         ))}
 
-        {/* TP / SL inputs — user must fill both */}
-        <div className="pt-2 space-y-2 border-t border-[#1E293B]">
+        <div className="pt-2 space-y-2.5 border-t border-[#1E293B]">
+          {/* Stop Loss presets */}
           <div className="flex items-center gap-2">
-            <span className="w-28 shrink-0 text-xs font-semibold text-[#10B981]">Take Profit %</span>
-            <div className="relative flex-1">
-              <input
-                type="number"
-                value={tp}
-                onChange={e => setTp(e.target.value)}
-                placeholder="למשל: 15"
-                min={0.1}
-                max={500}
-                step={0.5}
-                className="w-full rounded border border-[#1E293B] bg-[#0B0E14] px-2 py-1.5 pr-6 text-xs text-[#F8FAFC] placeholder-[#475569] focus:border-[#10B981]/50 focus:outline-none"
-              />
-              <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-[#64748B]">%</span>
+            <span className="w-24 shrink-0 text-xs font-semibold text-[#EF4444]">Stop Loss</span>
+            <div className="flex gap-1">
+              {SL_PRESETS.map(v => (
+                <button
+                  key={v}
+                  onClick={() => setSl(v)}
+                  className={cn(
+                    "rounded px-2.5 py-1 text-[10px] font-bold transition-all",
+                    sl === v
+                      ? "bg-[#EF4444] text-white"
+                      : "border border-[#1E293B] text-[#64748B] hover:border-[#EF4444]/40 hover:text-[#94A3B8]"
+                  )}
+                >
+                  {v}%
+                </button>
+              ))}
             </div>
           </div>
+
+          {/* R:R ratio */}
           <div className="flex items-center gap-2">
-            <span className="w-28 shrink-0 text-xs font-semibold text-[#EF4444]">Stop Loss %</span>
-            <div className="relative flex-1">
-              <input
-                type="number"
-                value={sl}
-                onChange={e => setSl(e.target.value)}
-                placeholder="למשל: 5"
-                min={0.1}
-                max={100}
-                step={0.5}
-                className="w-full rounded border border-[#1E293B] bg-[#0B0E14] px-2 py-1.5 pr-6 text-xs text-[#F8FAFC] placeholder-[#475569] focus:border-[#EF4444]/50 focus:outline-none"
-              />
-              <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-[#64748B]">%</span>
+            <span className="w-24 shrink-0 text-xs font-semibold text-[#94A3B8]">יחס R:R</span>
+            <div className="flex gap-1">
+              {RR_RATIOS.map(r => (
+                <button
+                  key={r.value}
+                  onClick={() => setRatio(r.value)}
+                  className={cn(
+                    "rounded px-2 py-1 text-[10px] font-bold transition-all",
+                    ratio === r.value
+                      ? "bg-[#6366F1] text-white"
+                      : "border border-[#1E293B] text-[#64748B] hover:border-[#6366F1]/40 hover:text-[#94A3B8]"
+                  )}
+                >
+                  {r.label}
+                </button>
+              ))}
             </div>
+          </div>
+
+          {/* Selected SL only */}
+          <div className="flex items-center gap-2 rounded-lg bg-[#EF4444]/5 border border-[#EF4444]/20 px-3 py-2">
+            <span className="text-xs font-semibold text-[#EF4444]">Stop Loss שנבחר</span>
+            <span className="text-sm font-bold text-[#EF4444]">-{sl}%</span>
           </div>
         </div>
 
@@ -402,9 +422,8 @@ function ConfirmationBlock({
       <Button
         variant="neon"
         size="sm"
-        className="w-full mt-2 disabled:opacity-40 disabled:cursor-not-allowed"
-        onClick={() => canRun && onRun(tpNum, slNum)}
-        disabled={!canRun}
+        className="w-full mt-2"
+        onClick={() => onRun(tp, sl)}
       >
         <Play className="h-3.5 w-3.5" />
         הפעל בדיקת {lookbackYears} שנים

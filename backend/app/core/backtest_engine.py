@@ -247,6 +247,14 @@ def _detect_entry_signal(df: pd.DataFrame, strategy: StrategyConfig) -> tuple[in
             if i > 10 and row["volume"] > df["volume"].iloc[:i].mean() * 5:
                 return i, row["open"]
 
+        else:
+            # Generic momentum: price closes above 5-bar high after a brief pullback
+            if i >= 10:
+                five_bar_high = df["high"].iloc[i - 5:i].max()
+                recent_low = df["low"].iloc[i - 5:i].min() < df["close"].iloc[i - 10]
+                if row["close"] > five_bar_high and recent_low:
+                    return i, row["close"]
+
     return None
 
 

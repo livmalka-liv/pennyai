@@ -7,6 +7,7 @@ import { TrendingUp, Crown } from "lucide-react";
 
 const navLinks = [
   { href: "/sandbox", label: "Sandbox" },
+  { href: "/library", label: "Strategy Library" },
   { href: "/vault", label: "Strategy Vault" },
   { href: "/academy", label: "Academy" },
 ];

@@ -606,36 +606,89 @@ function DcaSimulator({
   monthlyDca: number;
   onMonthlyDcaChange: (v: number) => void;
 }) {
-  const months = strategy.lookbackYears * 12;
-  const totalDeposited = startingCapital + monthlyDca * months;
+  const years = strategy.lookbackYears;
+  const months = years * 12;
+  const totalInvested = startingCapital + monthlyDca * months;
 
-  const monthlySpRate = 0.10 / 12;
-  const spFactor = Math.pow(1 + monthlySpRate, months);
-  const spFinal = startingCapital * spFactor + monthlyDca * (spFactor - 1) / monthlySpRate;
+  // CAGR helper: annualised return on total invested
+  const cagr = (finalVal: number) =>
+    totalInvested > 0 ? (Math.pow(Math.max(finalVal / totalInvested, 0.001), 1 / years) - 1) * 100 : 0;
 
-  const monthlyStratRate = Math.pow(Math.max(1 + metrics.totalRoi / 100, 0.01), 1 / months) - 1;
-  let stratWithDcaFinal = finalEquity;
+  // S&P 500 @ 10%/yr
+  const mSp = 0.10 / 12;
+  const spFactor = Math.pow(1 + mSp, months);
+  const spFinal = startingCapital * spFactor + monthlyDca * (spFactor - 1) / mSp;
+
+  // Inflation only @ 3%/yr (just deposits, no real return)
+  const mInfl = 0.03 / 12;
+  const inflFactor = Math.pow(1 + mInfl, months);
+  const inflFinal = startingCapital * inflFactor + monthlyDca * (inflFactor - 1) / mInfl;
+
+  // Strategy + DCA: each monthly deposit earns strategy's monthly rate for remaining months
+  const monthlyStratRate = Math.pow(Math.max(1 + metrics.totalRoi / 100, 0.001), 1 / months) - 1;
+  let stratDcaFinal = finalEquity;
   for (let m = 1; m <= months; m++) {
-    stratWithDcaFinal += monthlyDca * Math.pow(1 + monthlyStratRate, months - m);
+    stratDcaFinal += monthlyDca * Math.pow(1 + monthlyStratRate, months - m);
   }
 
+  type Verdict = { text: string; color: string; bg: string; border: string };
+  const verdict = (finalVal: number, invested: number): Verdict => {
+    const c = cagr(finalVal);
+    if (c >= 15)  return { text: "רווחי מאוד ✅", color: "text-[#10B981]", bg: "bg-[#10B981]/10", border: "border-[#10B981]/25" };
+    if (c >= 10)  return { text: "רווחי טוב ✅", color: "text-[#10B981]", bg: "bg-[#10B981]/10", border: "border-[#10B981]/25" };
+    if (c >= 5)   return { text: "רווחי — מתחת ל-S&P 🟡", color: "text-[#F59E0B]", bg: "bg-[#F59E0B]/10", border: "border-[#F59E0B]/25" };
+    if (c >= 3)   return { text: "בקושי מכסה אינפלציה 🟠", color: "text-[#F97316]", bg: "bg-[#F97316]/10", border: "border-[#F97316]/25" };
+    if (finalVal >= invested) return { text: "לא מפסיד אך לא רווחי ⚪", color: "text-[#64748B]", bg: "bg-[#64748B]/10", border: "border-[#64748B]/25" };
+    return { text: "מפסיד כסף ❌", color: "text-[#EF4444]", bg: "bg-[#EF4444]/10", border: "border-[#EF4444]/25" };
+  };
+
   const scenarios = [
-    { label: "הפקדה בלבד (ללא תשואה)", desc: "הכסף יושב בחשבון, בלי השקעה", final: totalDeposited, color: "text-[#64748B]", bar: "bg-[#1E293B]" },
-    { label: "S&P 500 — ביצ'מארק (10%/שנה)", desc: `השקעה פסיבית במדד — ${strategy.lookbackYears} שנים`, final: spFinal, color: "text-[#6366F1]", bar: "bg-[#6366F1]" },
-    { label: "האסטרטגיה שלך בלבד", desc: "תוצאת הבדיקה, ללא הפקדות חודשיות", final: finalEquity, color: metrics.totalRoi >= 0 ? "text-[#10B981]" : "text-[#EF4444]", bar: metrics.totalRoi >= 0 ? "bg-[#10B981]" : "bg-[#EF4444]" },
-    { label: "אסטרטגיה + הפקדות חודשיות", desc: "כל הפקדה גם נסחרת ומרוויחה תשואת האסטרטגיה", final: stratWithDcaFinal, color: "text-[#F59E0B]", bar: "bg-[#F59E0B]" },
+    {
+      title: "הפקדה בלבד (חשבון עו\"ש)",
+      desc: "הכסף יושב ללא ריבית — ממחיש את ערך הזמן",
+      final: totalInvested,
+      accentColor: "text-[#64748B]",
+      barColor: "bg-[#334155]",
+      v: verdict(totalInvested, totalInvested),
+    },
+    {
+      title: "הצמדה לאינפלציה (3%/שנה)",
+      desc: "מינימום שצריך לעשות כדי לא להפסיד ערך קנייה",
+      final: inflFinal,
+      accentColor: "text-[#94A3B8]",
+      barColor: "bg-[#475569]",
+      v: verdict(inflFinal, totalInvested),
+    },
+    {
+      title: "S&P 500 — השוואת שוק (10%/שנה)",
+      desc: "תשואת המדד הפסיבי ההיסטורית — קנה מדד וישן",
+      final: spFinal,
+      accentColor: "text-[#6366F1]",
+      barColor: "bg-[#6366F1]",
+      v: verdict(spFinal, totalInvested),
+    },
+    {
+      title: "האסטרטגיה שלך + הפקדות חודשיות",
+      desc: "כל הפקדה חדשה מרוויחה את תשואת האסטרטגיה",
+      final: stratDcaFinal,
+      accentColor: "text-[#F59E0B]",
+      barColor: "bg-[#F59E0B]",
+      v: verdict(stratDcaFinal, totalInvested),
+    },
   ];
+
   const maxFinal = Math.max(...scenarios.map(s => s.final));
 
   return (
     <div className="space-y-4">
+      {/* Input */}
       <div className="glass-card p-4">
         <p className="text-xs font-semibold uppercase tracking-wider text-[#6366F1] mb-3 flex items-center gap-1.5">
-          <DollarSign className="h-3.5 w-3.5" /> הגדרת הפקדה חודשית
+          <DollarSign className="h-3.5 w-3.5" /> הפקדה חודשית קבועה
         </p>
         <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-xs text-[#64748B] shrink-0">הפקדה כל חודש:</span>
-          <div className="relative max-w-[140px]">
+          <span className="text-xs text-[#64748B] shrink-0">כל חודש מפקיד:</span>
+          <div className="relative max-w-[120px]">
             <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-[#64748B]">$</span>
             <input
               type="number"
@@ -646,52 +699,98 @@ function DcaSimulator({
               className="w-full rounded border border-[#1E293B] bg-[#0B0E14] py-1.5 pl-5 pr-2 text-xs text-[#F8FAFC] focus:border-[#6366F1]/50 focus:outline-none"
             />
           </div>
-          <span className="text-xs text-[#64748B]">
-            × {months} חודשים = <span className="text-[#F8FAFC] font-medium">{formatCurrency(monthlyDca * months)}</span> הפקדות
-          </span>
+          <div className="text-xs text-[#64748B]">
+            <span className="text-[#F8FAFC] font-medium">{formatCurrency(monthlyDca)}</span> × {months} חודשים
+            {" = "}
+            <span className="text-[#F59E0B] font-semibold">{formatCurrency(monthlyDca * months)}</span> הפקדות
+            {" + "}
+            <span className="text-[#F8FAFC] font-medium">{formatCurrency(startingCapital)}</span> הון ראשוני
+            {" = "}
+            <span className="text-[#F8FAFC] font-bold">{formatCurrency(totalInvested)}</span> סה"כ מושקע
+          </div>
         </div>
       </div>
 
-      <div className="glass-card p-4 space-y-4">
-        <p className="text-xs font-semibold uppercase tracking-wider text-[#64748B]">השוואת תרחישים — {strategy.lookbackYears} שנים</p>
+      {/* Scenario cards */}
+      <div className="space-y-3">
         {scenarios.map((s, i) => {
+          const netProfit = s.final - totalInvested;
+          const scenarioCagr = cagr(s.final);
           const barPct = maxFinal > 0 ? Math.min((s.final / maxFinal) * 100, 100) : 0;
           return (
-            <div key={i} className="space-y-1.5">
-              <div className="flex items-start justify-between gap-2">
+            <div key={i} className={cn("glass-card p-4 border", s.v.border, s.v.bg)}>
+              <div className="flex items-start justify-between gap-3 mb-2">
                 <div>
-                  <p className="text-xs font-semibold text-[#F8FAFC]">{s.label}</p>
-                  <p className="text-[10px] text-[#64748B]">{s.desc}</p>
+                  <p className="text-xs font-bold text-[#F8FAFC]">{s.title}</p>
+                  <p className="text-[10px] text-[#64748B] mt-0.5">{s.desc}</p>
                 </div>
-                <div className="text-right shrink-0">
-                  <p className={`text-sm font-bold tabular-nums ${s.color}`}>{formatCurrency(s.final)}</p>
-                  {i > 0 && (
-                    <p className="text-[10px] text-[#64748B]">
-                      {formatPercent(((s.final - totalDeposited) / totalDeposited) * 100)} על סה"כ מושקע
-                    </p>
-                  )}
+                <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0", s.v.color, s.v.border, s.v.bg)}>
+                  {s.v.text}
+                </span>
+              </div>
+
+              {/* Numbers row */}
+              <div className="grid grid-cols-4 gap-2 mb-2 text-center">
+                <div className="rounded bg-[#0B0E14]/60 px-2 py-1.5">
+                  <p className={cn("text-sm font-bold tabular-nums", s.accentColor)}>{formatCurrency(s.final)}</p>
+                  <p className="text-[9px] text-[#64748B] mt-0.5">שווי סופי</p>
+                </div>
+                <div className="rounded bg-[#0B0E14]/60 px-2 py-1.5">
+                  <p className={cn("text-sm font-bold tabular-nums", netProfit >= 0 ? "text-[#10B981]" : "text-[#EF4444]")}>
+                    {netProfit >= 0 ? "+" : ""}{formatCurrency(netProfit)}
+                  </p>
+                  <p className="text-[9px] text-[#64748B] mt-0.5">רווח נקי</p>
+                </div>
+                <div className="rounded bg-[#0B0E14]/60 px-2 py-1.5">
+                  <p className={cn("text-sm font-bold tabular-nums", netProfit >= 0 ? "text-[#10B981]" : "text-[#EF4444]")}>
+                    {netProfit >= 0 ? "+" : ""}{formatPercent(((s.final - totalInvested) / totalInvested) * 100)}
+                  </p>
+                  <p className="text-[9px] text-[#64748B] mt-0.5">תשואה כוללת</p>
+                </div>
+                <div className="rounded bg-[#0B0E14]/60 px-2 py-1.5">
+                  <p className={cn("text-sm font-bold tabular-nums", scenarioCagr >= 10 ? "text-[#10B981]" : scenarioCagr >= 5 ? "text-[#F59E0B]" : "text-[#EF4444]")}>
+                    {scenarioCagr >= 0 ? "+" : ""}{scenarioCagr.toFixed(1)}%
+                  </p>
+                  <p className="text-[9px] text-[#64748B] mt-0.5">תשואה שנתית</p>
                 </div>
               </div>
-              <div className="h-2 w-full rounded-full bg-[#1E293B]">
-                <div className={`h-2 rounded-full transition-all duration-500 ${s.bar}`} style={{ width: `${barPct}%` }} />
+
+              {/* Bar */}
+              <div className="h-1.5 w-full rounded-full bg-[#1E293B]">
+                <div className={cn("h-1.5 rounded-full transition-all duration-500", s.barColor)} style={{ width: `${barPct}%` }} />
               </div>
             </div>
           );
         })}
       </div>
 
-      <div className="glass-card p-4 border-[#F59E0B]/20 bg-[#F59E0B]/5">
-        <p className="text-xs font-semibold text-[#F59E0B] mb-1">תובנה</p>
-        <p className="text-xs text-[#94A3B8]">
-          הפקדת בסה"כ{" "}
-          <span className="text-[#F8FAFC] font-medium">{formatCurrency(monthlyDca * months)}</span> נוספים.{" "}
-          שילוב האסטרטגיה עם הפקדות חודשיות:{" "}
-          <span className={`font-bold ${stratWithDcaFinal >= spFinal ? "text-[#10B981]" : "text-[#EF4444]"}`}>
-            {formatCurrency(stratWithDcaFinal)}
-          </span>{" "}
-          {stratWithDcaFinal >= spFinal ? "— עדיף על S&P" : "— נמוך מ-S&P"}.
-        </p>
-      </div>
+      {/* Summary verdict */}
+      {(() => {
+        const stratCagr = cagr(stratDcaFinal);
+        const spCagr = cagr(spFinal);
+        const beatsMarket = stratDcaFinal > spFinal;
+        const netProfit = stratDcaFinal - totalInvested;
+        return (
+          <div className={cn("glass-card p-4 border", beatsMarket ? "border-[#10B981]/25 bg-[#10B981]/5" : "border-[#F59E0B]/25 bg-[#F59E0B]/5")}>
+            <p className={cn("text-xs font-bold mb-2", beatsMarket ? "text-[#10B981]" : "text-[#F59E0B]")}>
+              {beatsMarket ? "✅ האסטרטגיה מכה את השוק" : "🟡 האסטרטגיה מתחת ל-S&P"}
+            </p>
+            <p className="text-xs text-[#94A3B8] leading-relaxed">
+              השקעת בסה"כ <span className="text-[#F8FAFC] font-semibold">{formatCurrency(totalInvested)}</span> על פני {years} שנים
+              ({formatCurrency(startingCapital)} ראשוני + {formatCurrency(monthlyDca * months)} הפקדות).{" "}
+              עם האסטרטגיה + הפקדות חודשיות — תסיים עם{" "}
+              <span className={cn("font-bold", beatsMarket ? "text-[#10B981]" : "text-[#F59E0B]")}>{formatCurrency(stratDcaFinal)}</span>,
+              כלומר רווח נקי של{" "}
+              <span className={cn("font-bold", netProfit >= 0 ? "text-[#10B981]" : "text-[#EF4444]")}>{formatCurrency(Math.abs(netProfit))}</span>
+              {netProfit >= 0 ? " מעל ההשקעה" : " הפסד"}.{" "}
+              תשואה שנתית ממוצעת: <span className="text-[#F8FAFC] font-bold">{stratCagr.toFixed(1)}%</span>
+              {beatsMarket
+                ? ` — עדיף על S&P (${spCagr.toFixed(1)}%) ב-${(stratCagr - spCagr).toFixed(1)}% בשנה.`
+                : ` — נמוך מ-S&P (${spCagr.toFixed(1)}%) ב-${(spCagr - stratCagr).toFixed(1)}% בשנה.`}
+            </p>
+          </div>
+        );
+      })()}
     </div>
   );
 }

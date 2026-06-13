@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import ChatPanel from "@/components/sandbox/ChatPanel";
 import AnalyticsPanel from "@/components/sandbox/AnalyticsPanel";
 import type { BacktestResult, StrategyConfig, LookbackYears } from "@/types";
@@ -12,6 +12,16 @@ export default function SandboxPage() {
   const [startingCapital, setStartingCapital] = useState(10000);
   const [lookbackYears, setLookbackYears] = useState<LookbackYears>(5);
   const [riskPerTrade, setRiskPerTrade] = useState(500);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("preload_strategy");
+    if (saved) {
+      try {
+        setPreloadStrategy(JSON.parse(saved));
+      } catch {}
+      localStorage.removeItem("preload_strategy");
+    }
+  }, []);
 
   return (
     <div className="flex h-[calc(100vh-56px)] overflow-hidden">
