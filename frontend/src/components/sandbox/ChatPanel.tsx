@@ -324,14 +324,6 @@ export default function ChatPanel({
   );
 }
 
-const SL_PRESETS = [3, 5, 7, 10];
-const RR_RATIOS = [
-  { label: "1:1", value: 1 },
-  { label: "1:1.5", value: 1.5 },
-  { label: "1:2", value: 2 },
-  { label: "1:3", value: 3 },
-];
-
 function ConfirmationBlock({
   strategy,
   lookbackYears,
@@ -341,11 +333,14 @@ function ConfirmationBlock({
   lookbackYears: LookbackYears;
   onRun: (tpPct: number, slPct: number) => void;
 }) {
-  const [sl, setSl] = useState(5);
-  const [ratio, setRatio] = useState(2);
-  const tp = Math.round(sl * ratio * 10) / 10;
-
   const displayRules = strategy.rules.filter(r => r.type !== "exit");
+
+  // Extract TP/SL from parsed strategy if available, otherwise use sensible defaults
+  const exitRules = strategy.rules.filter(r => r.type === "exit");
+  const tpRule = exitRules.find(r => (r.parameters.pct as number) > 0);
+  const slRule = exitRules.find(r => (r.parameters.pct as number) < 0);
+  const tp = tpRule ? Math.abs(tpRule.parameters.pct as number) : 15;
+  const sl = slRule ? Math.abs(slRule.parameters.pct as number) : 5;
 
   return (
     <div className="mt-3 rounded-lg border border-[#6366F1]/20 bg-[#6366F1]/5 p-3 space-y-2">
@@ -363,57 +358,7 @@ function ConfirmationBlock({
           </div>
         ))}
 
-        <div className="pt-2 space-y-2.5 border-t border-[#1E293B]">
-          {/* Stop Loss presets */}
-          <div className="flex items-center gap-2">
-            <span className="w-24 shrink-0 text-xs font-semibold text-[#EF4444]">Stop Loss</span>
-            <div className="flex gap-1">
-              {SL_PRESETS.map(v => (
-                <button
-                  key={v}
-                  onClick={() => setSl(v)}
-                  className={cn(
-                    "rounded px-2.5 py-1 text-[10px] font-bold transition-all",
-                    sl === v
-                      ? "bg-[#EF4444] text-white"
-                      : "border border-[#1E293B] text-[#64748B] hover:border-[#EF4444]/40 hover:text-[#94A3B8]"
-                  )}
-                >
-                  {v}%
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* R:R ratio */}
-          <div className="flex items-center gap-2">
-            <span className="w-24 shrink-0 text-xs font-semibold text-[#94A3B8]">יחס R:R</span>
-            <div className="flex gap-1">
-              {RR_RATIOS.map(r => (
-                <button
-                  key={r.value}
-                  onClick={() => setRatio(r.value)}
-                  className={cn(
-                    "rounded px-2 py-1 text-[10px] font-bold transition-all",
-                    ratio === r.value
-                      ? "bg-[#6366F1] text-white"
-                      : "border border-[#1E293B] text-[#64748B] hover:border-[#6366F1]/40 hover:text-[#94A3B8]"
-                  )}
-                >
-                  {r.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Selected SL only */}
-          <div className="flex items-center gap-2 rounded-lg bg-[#EF4444]/5 border border-[#EF4444]/20 px-3 py-2">
-            <span className="text-xs font-semibold text-[#EF4444]">Stop Loss שנבחר</span>
-            <span className="text-sm font-bold text-[#EF4444]">-{sl}%</span>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[#1E293B] pt-1 text-xs">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[#1E293B] pt-2 text-xs">
           <span className="text-[#64748B]">Slippage: <span className="font-medium text-[#F8FAFC]">{strategy.slippage}%</span></span>
           <span className="text-[#64748B]">Timeframe: <span className="font-medium text-[#F8FAFC]">{strategy.timeframe}</span></span>
           <span className="text-[#64748B]">טווח: <span className="font-medium text-[#F8FAFC]">{lookbackYears} שנים</span></span>
