@@ -32,13 +32,52 @@ from app.data.types import CatalystDay
 logger = logging.getLogger(__name__)
 
 STARTING_CAPITAL = 10_000.0
-POSITION_SIZE_PCT = 0.95  # Deploy 95% of starting capital per trade (fixed, not compounding)
-MIN_SLIPPAGE_PER_SHARE = 0.02  # $0.02 minimum slippage per share
-
-# Fixed dollar amount deployed per trade — prevents geometric compounding explosion
-# that would otherwise produce astronomical equity on 1000+ trade backtests.
-# Reflects real penny-stock liquidity: you can't scale position size with a growing account.
+POSITION_SIZE_PCT = 0.95
+MIN_SLIPPAGE_PER_SHARE = 0.02
 POSITION_DOLLARS = STARTING_CAPITAL * POSITION_SIZE_PCT  # $9,500
+
+COMMISSION_PER_SHARE = 0.005  # IBKR rate
+MAX_VOLUME_PCT = 0.01          # Can't trade more than 1% of daily volume
+MARKET_IMPACT_THRESHOLD = 0.002  # Impact kicks in above 0.2% of volume
+
+
+def _bid_ask_spread_pct(price: float) -> float:
+    """Realistic penny stock bid/ask spread based on price tier."""
+    if price < 1.0:
+        return 3.0
+    elif price < 3.0:
+        return 2.0
+    elif price < 10.0:
+        return 1.0
+    elif price < 20.0:
+        return 0.5
+    return 0.2
+
+
+def _liquidity_check(price: float, day_volume: int) -> tuple[bool, float]:
+    """
+    Returns (can_trade, effective_position_dollars).
+    Caps position at 1% of daily volume to avoid moving the market.
+    """
+    max_shares = day_volume * MAX_VOLUME_PCT
+    max_dollars = max_shares * price
+    if max_dollars < 500:
+        return False, 0.0
+    effective = min(POSITION_DOLLARS, max_dollars)
+    return True, effective
+
+
+def _market_impact_pct(position_dollars: float, price: float, day_volume: int) -> float:
+    """Extra slippage from moving the market with a large order."""
+    shares = position_dollars / price
+    vol_pct = shares / max(day_volume, 1)
+    excess = max(0, vol_pct - MARKET_IMPACT_THRESHOLD)
+    return excess * 50  # 50% of excess volume becomes price impact
+
+
+def _commission_pct(position_dollars: float, price: float) -> float:
+    shares = position_dollars / price
+    return (shares * COMMISSION_PER_SHARE / position_dollars) * 100
 
 
 def run_backtest(strategy: StrategyConfig) -> BacktestResult:
@@ -87,8 +126,19 @@ def run_backtest(strategy: StrategyConfig) -> BacktestResult:
             continue
 
         entry_minute, entry_price_raw = signal
+
+        # Liquidity check — skip if can't get meaningful fill
+        can_trade, eff_position = _liquidity_check(entry_price_raw, day.day_volume)
+        if not can_trade:
+            continue
+
+        # Entry cost: slippage + spread + market impact + commission
         slippage_pct = _calculate_slippage(entry_price_raw, strategy.slippage)
-        entry_price = entry_price_raw * (1 + slippage_pct / 100)
+        spread_pct = _bid_ask_spread_pct(entry_price_raw) / 2  # pay half-spread on entry
+        impact_pct = _market_impact_pct(eff_position, entry_price_raw, day.day_volume)
+        commission_pct = _commission_pct(eff_position, entry_price_raw)
+        entry_cost_pct = slippage_pct + spread_pct + impact_pct + commission_pct
+        entry_price = entry_price_raw * (1 + entry_cost_pct / 100)
 
         exit_minute, exit_price_raw, exit_reason = _simulate_exit(
             df=df,
@@ -97,8 +147,12 @@ def run_backtest(strategy: StrategyConfig) -> BacktestResult:
             strategy=strategy,
         )
 
+        # Exit cost: slippage + spread + commission
         slippage_exit = _calculate_slippage(exit_price_raw, strategy.slippage)
-        exit_price = exit_price_raw * (1 - slippage_exit / 100)
+        spread_exit = _bid_ask_spread_pct(exit_price_raw) / 2
+        commission_exit = _commission_pct(eff_position, exit_price_raw)
+        exit_cost_pct = slippage_exit + spread_exit + commission_exit
+        exit_price = exit_price_raw * (1 - exit_cost_pct / 100)
 
         return_pct = ((exit_price - entry_price) / entry_price) * 100
         holding_minutes = exit_minute - entry_minute
