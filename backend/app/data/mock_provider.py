@@ -135,19 +135,21 @@ def _generate_1m_candles(
 
 def _get_trend_factor(minute: int, gap_pct: float) -> float:
     """Returns per-minute drift based on typical penny stock intraday shape."""
-    strength = min(gap_pct / 100, 1.5)
+    strength = min(gap_pct / 50, 2.0)  # 50% gapper = strength 1.0, 100% = 2.0
 
-    if minute < 10:        # Explosive open
+    if minute < 8:          # Explosive open — gap continuation
+        return 0.006 * strength
+    elif minute < 25:       # Morning spike continuation
         return 0.003 * strength
-    elif minute < 30:      # Morning spike continuation
-        return 0.001 * strength
-    elif minute < 60:      # First pullback
-        return -0.002
-    elif minute < 120:     # Base building
-        return random.uniform(-0.0005, 0.0005)
-    elif minute < 150:     # Potential VWAP reclaim
-        return 0.0008 * strength
-    elif minute < 300:     # Midday chop
-        return random.uniform(-0.0008, 0.0008)
-    else:                  # Power hour
-        return 0.001 * strength * random.choice([1, -1])
+    elif minute < 55:       # First pullback (not too deep — healthy flag)
+        return -0.0015
+    elif minute < 90:       # Base building / flag consolidation
+        return random.uniform(-0.0008, 0.0004)
+    elif minute < 160:      # Second leg — 70% of days get a proper breakout
+        if random.random() < 0.70:
+            return 0.004 * strength  # Strong second leg, often breaks above morning HOD
+        return random.uniform(-0.001, 0.001)
+    elif minute < 300:      # Midday fade
+        return random.uniform(-0.001, 0.0005)
+    else:                   # Power hour
+        return 0.002 * strength * random.choice([1, -1])

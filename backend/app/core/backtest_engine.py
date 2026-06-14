@@ -283,22 +283,28 @@ def _detect_entry_signal(df: pd.DataFrame, strategy: StrategyConfig) -> tuple[in
     entry_rule = entry_rules[0]
     cond = entry_rule.condition.lower()
 
-    # Skip first 2 minutes (too chaotic at open)
-    for i in range(2, len(df)):
+    # Skip first 10 minutes (too chaotic at open — let the pattern form)
+    for i in range(10, len(df)):
         row = df.iloc[i]
 
         if "vwap" in cond:
             if "reclaim" in cond or "hold" in cond:
-                # Look for price below VWAP then reclaim
-                if i >= 5 and not df.iloc[i - 5]["above_vwap"] and row["above_vwap"]:
+                # Price was below VWAP at some point in last 15 bars, now reclaims
+                lookback = df["above_vwap"].iloc[max(0, i - 15):i]
+                was_below = not lookback.all()  # at least one bar below VWAP recently
+                if was_below and row["above_vwap"] and i >= 20:
                     return i, row["close"]
             else:
-                if row["vwap_cross_up"]:
+                if row["vwap_cross_up"] and i >= 20:
                     return i, row["close"]
 
         elif "hod" in cond or "high of day" in cond:
-            if row["break_hod"] and i > 5:
-                return i, row["high"]
+            # Enter on HOD break AFTER consolidation — no new HOD in the last 20 bars
+            # This filters out the explosive open and waits for a bull-flag-style breakout
+            if row["break_hod"] and i >= 30:
+                recent_breaks = df["break_hod"].iloc[max(0, i - 20):i]
+                if not recent_breaks.any():  # Consolidation confirmed
+                    return i, row["close"]  # Enter at close, not the high of the candle
 
         elif "rsi" in cond:
             level = entry_rule.parameters.get("level", 30)
