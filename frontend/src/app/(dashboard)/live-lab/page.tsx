@@ -757,7 +757,7 @@ function SignalCard({ signal: s }: { signal: Signal }) {
           s.dollarsGain >= 0 ? "bg-[#10B981]/15 text-[#10B981]" : "bg-[#EF4444]/15 text-[#EF4444]"
         )}>
           {s.dollarsGain >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-          {s.dollarsGain >= 0 ? "+" : ""}${Math.abs(s.dollarsGain)} · ${(500 * ((s.returnPct || 0) / 100)).toFixed(0)} עם $500/עסקה
+          {s.dollarsGain >= 0 ? "+" : "-"}${Math.abs(s.dollarsGain).toFixed(0)} · {500 * ((s.returnPct || 0) / 100) >= 0 ? "+" : "-"}${Math.abs(500 * ((s.returnPct || 0) / 100)).toFixed(0)} עם $500/עסקה
         </div>
       )}
     </div>
