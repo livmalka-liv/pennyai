@@ -1,5 +1,7 @@
 "use client";
 
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+
 import { useState, useEffect, useCallback } from "react";
 import {
   Activity, Play, Square, RefreshCw, TrendingUp, TrendingDown,
@@ -172,11 +174,12 @@ const sessionIcon = (s: SessionType) =>
 export default function LiveLabPage() {
   const [isRunning, setIsRunning] = useState(true);
   const [strategies, setStrategies] = useState<StrategyTracker[]>(MOCK_STRATEGIES);
-  const [signals] = useState<Signal[]>(MOCK_SIGNALS);
-  const [lastScan, setLastScan] = useState("17:02");
+  const [signals, setSignals] = useState<Signal[]>(MOCK_SIGNALS);
+  const [lastScan, setLastScan] = useState("—");
   const [scanning, setScanning] = useState(false);
   const [activeTab, setActiveTab] = useState<"signals" | "heatmap">("signals");
   const [israelTime, setIsraelTime] = useState("");
+  const [demoMode, setDemoMode] = useState(true); // true until real data arrives
 
   // Update Israel clock
   useEffect(() => {
@@ -189,8 +192,64 @@ export default function LiveLabPage() {
     return () => clearInterval(iv);
   }, []);
 
-  const triggerScan = useCallback(() => {
+  // Load real data from backend
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [statusRes, signalsRes] = await Promise.all([
+          fetch(`${API}/live-lab/status`),
+          fetch(`${API}/live-lab/signals?days=1`),
+        ]);
+        if (statusRes.ok) {
+          const status = await statusRes.json();
+          if (status.strategies?.length) {
+            setStrategies(status.strategies.map((s: any) => ({
+              id: s.id, name: s.name, active: s.active,
+              totalSignals: s.total_signals, wins: s.wins,
+              losses: s.losses, totalPnl: s.total_pnl,
+              startedDaysAgo: status.days_of_data ?? 0,
+            })));
+          }
+        }
+        if (signalsRes.ok) {
+          const raw: any[] = await signalsRes.json();
+          if (raw.length > 0) {
+            setDemoMode(false);
+            setSignals(raw.map(t => ({
+              id: t.id, ticker: t.ticker,
+              strategyName: t.strategy_name, strategyId: t.strategy_id,
+              entryTime: t.entry_time, entryTimeET: t.entry_time_et,
+              exitTime: t.exit_time,
+              entryPrice: t.entry_price, exitPrice: t.exit_price,
+              currentPrice: t.exit_price ?? t.entry_price,
+              tpPrice: t.tp_price, slPrice: t.sl_price,
+              tpPct: 15, slPct: -5,
+              returnPct: t.return_pct, dollarsGain: t.dollars_gain,
+              holdMinutes: t.hold_minutes,
+              status: t.status as TradeStatus,
+              session: (t.session ?? "regular") as SessionType,
+              catalyst: t.catalyst ?? "—",
+              rvol: t.rvol ?? 0, float: (t.float_shares ?? 0) / 1e6,
+              exitReason: t.exit_reason,
+            })));
+            const now = new Date().toLocaleTimeString("he-IL", { timeZone: "Asia/Jerusalem", hour: "2-digit", minute: "2-digit" });
+            setLastScan(now);
+          }
+        }
+      } catch {
+        // backend offline — keep mock data
+      }
+    };
+    load();
+    const iv = setInterval(load, 60_000); // refresh every minute
+    return () => clearInterval(iv);
+  }, []);
+
+  const triggerScan = useCallback(async () => {
     setScanning(true);
+    try {
+      await fetch(`${API}/live-lab/scan-now`, { method: "POST" });
+    } catch {}
     setTimeout(() => {
       setScanning(false);
       const now = new Date().toLocaleTimeString("he-IL", { timeZone: "Asia/Jerusalem", hour: "2-digit", minute: "2-digit" });
@@ -263,6 +322,16 @@ export default function LiveLabPage() {
           </button>
         </div>
       </div>
+
+      {/* Demo mode notice */}
+      {demoMode && (
+        <div className="flex items-center gap-2 border-b border-[#F59E0B]/20 bg-[#F59E0B]/5 px-5 py-2 shrink-0">
+          <AlertTriangle className="h-3.5 w-3.5 text-[#F59E0B] shrink-0" />
+          <p className="text-xs text-[#F59E0B]">
+            <span className="font-semibold">מצב דמו</span> — מוצגים נתונים לדוגמה. כשהסורק יאתר עסקאות אמיתיות הן יוצגו כאן אוטומטית.
+          </p>
+        </div>
+      )}
 
       {/* ── 3-Column Body ── */}
       <div className="flex flex-1 overflow-hidden">
@@ -516,7 +585,38 @@ export default function LiveLabPage() {
               ))}
             </div>
 
-            {/* AI Coach CTA */}
+              {/* AI Optimizer */}
+            <div className="rounded-xl border border-[#F59E0B]/25 bg-[#F59E0B]/5 p-3">
+              <p className="text-xs font-bold text-[#F59E0B] mb-2 flex items-center gap-1.5">
+                <Zap className="h-3.5 w-3.5" /> AI Optimizer
+              </p>
+              <p className="text-[10px] text-[#94A3B8] leading-relaxed mb-2">
+                כל שבוע ה-AI בודק אוטומטית אם הוספת משתנה (שעה, מחיר, rvol) מעלה את אחוז ההצלחה.
+              </p>
+              {/* Mock optimization discoveries */}
+              <div className="space-y-1.5">
+                {[
+                  { strategy: "Bull Flag", var: "16:30-18:30 בלבד", base: 54, improved: 67, status: "accepted" },
+                  { strategy: "VWAP", var: "rvol ≥ 7x", base: 46, improved: 58, status: "testing" },
+                ].map((opt, i) => (
+                  <div key={i} className="rounded-lg bg-[#0B0E14]/60 p-2">
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-[10px] font-semibold text-[#F8FAFC]">{opt.strategy}</span>
+                      <span className={cn(
+                        "text-[8px] px-1.5 py-0.5 rounded font-bold",
+                        opt.status === "accepted" ? "bg-[#10B981]/15 text-[#10B981]" : "bg-[#F59E0B]/15 text-[#F59E0B]"
+                      )}>
+                        {opt.status === "accepted" ? "אושר ✓" : "בבדיקה"}
+                      </span>
+                    </div>
+                    <p className="text-[9px] text-[#64748B]">{opt.var}</p>
+                    <p className="text-[9px] text-[#10B981] font-medium">{opt.base}% → {opt.improved}% WR (+{opt.improved - opt.base}pp)</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+          {/* AI Coach CTA */}
             <div className={cn(
               "rounded-xl border p-4",
               coachUnlocked
