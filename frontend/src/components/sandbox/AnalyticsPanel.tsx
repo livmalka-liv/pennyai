@@ -43,6 +43,17 @@ export default function AnalyticsPanel({ result, isRunning, startingCapital, ris
   const riskAdjustedFinal = startingCapital + riskAdjustedPnl;
   const riskAdjustedRoi = (riskAdjustedPnl / startingCapital) * 100;
 
+  // Recalculate max drawdown using the user's risk-per-trade (not backend's fixed $9,500)
+  const riskAdjustedMaxDd = (() => {
+    let eq = startingCapital, peak = startingCapital, maxDd = 0;
+    for (const t of trades) {
+      eq = Math.max(0, eq + riskPerTrade * (t.returnPct / 100));
+      if (eq > peak) peak = eq;
+      if (peak > 0) maxDd = Math.max(maxDd, (peak - eq) / peak * 100);
+    }
+    return -maxDd;
+  })();
+
   const recommendation: { label: string; color: string; bg: string; border: string } =
     metrics.totalRoi > 15 && metrics.winRate > 55 && metrics.profitFactor >= 1.5 && metrics.maxDrawdown > -25
       ? { label: "מומלץ מאוד ✅", color: "text-[#10B981]", bg: "bg-[#10B981]/10", border: "border-[#10B981]/30" }
@@ -131,7 +142,7 @@ export default function AnalyticsPanel({ result, isRunning, startingCapital, ris
 
             {/* Main KPIs */}
             <div className="grid grid-cols-3 gap-3">
-              <StatCard label="תשואה כוללת" value={formatPercent(metrics.totalRoi)} sub={`${strategy.lookbackYears} שנות בדיקה`} trend={metrics.totalRoi >= 0 ? "up" : "down"} />
+              <StatCard label="תשואה כוללת" value={formatPercent(riskAdjustedRoi)} sub={`${strategy.lookbackYears} שנות בדיקה`} trend={riskAdjustedRoi >= 0 ? "up" : "down"} />
               <StatCard label="אחוז הצלחה" value={`${metrics.winRate}%`} sub={`${metrics.winningTrades}W / ${metrics.losingTrades}L`} trend={metrics.winRate >= 50 ? "up" : "down"} />
               <StatCard label="Profit Factor" value={String(metrics.profitFactor)} sub="רווח גולמי / הפסד גולמי" trend={metrics.profitFactor >= 1.5 ? "up" : "neutral"} />
             </div>
@@ -139,7 +150,7 @@ export default function AnalyticsPanel({ result, isRunning, startingCapital, ris
             {/* Secondary KPIs */}
             <div className="grid grid-cols-4 gap-2">
               {[
-                { icon: ArrowDownRight, label: "Max Drawdown", value: formatPercent(metrics.maxDrawdown), color: "text-[#EF4444]" },
+                { icon: ArrowDownRight, label: "Max Drawdown", value: formatPercent(riskAdjustedMaxDd), color: "text-[#EF4444]" },
                 { icon: Award, label: "Sharpe Ratio", value: String(metrics.sharpeRatio), color: "text-[#6366F1]" },
                 { icon: TrendingUp, label: "עסקה ממוצעת", value: formatPercent(metrics.avgReturnPerTrade), color: "text-[#10B981]" },
                 { icon: Clock, label: "המתנה ממוצעת", value: `${metrics.avgHoldingMinutes}min`, color: "text-[#94A3B8]" },
@@ -367,7 +378,7 @@ export default function AnalyticsPanel({ result, isRunning, startingCapital, ris
         )}
 
         {/* ── OPINION TAB ── */}
-        {activeTab === "opinion" && <ProfessionalOpinion metrics={metrics} strategy={strategy} trades={trades} riskPerTrade={riskPerTrade} />}
+        {activeTab === "opinion" && <ProfessionalOpinion metrics={metrics} strategy={strategy} trades={trades} riskPerTrade={riskPerTrade} riskAdjustedMaxDd={riskAdjustedMaxDd} />}
 
         {/* ── DCA TAB ── */}
         {activeTab === "dca" && <DcaSimulator
@@ -386,12 +397,13 @@ export default function AnalyticsPanel({ result, isRunning, startingCapital, ris
 }
 
 function ProfessionalOpinion({
-  metrics, strategy, trades, riskPerTrade,
+  metrics, strategy, trades, riskPerTrade, riskAdjustedMaxDd,
 }: {
   metrics: BacktestResult["metrics"];
   strategy: BacktestResult["strategy"];
   trades: BacktestResult["trades"];
   riskPerTrade: number;
+  riskAdjustedMaxDd: number;
 }) {
   type Grade = "good" | "ok" | "bad";
 
@@ -424,8 +436,8 @@ function ProfessionalOpinion({
     },
     {
       label: "Max Drawdown",
-      value: `${metrics.maxDrawdown}%`,
-      grade: metrics.maxDrawdown > -15 ? "good" : metrics.maxDrawdown > -30 ? "ok" : "bad",
+      value: `${riskAdjustedMaxDd.toFixed(1)}%`,
+      grade: riskAdjustedMaxDd > -15 ? "good" : riskAdjustedMaxDd > -30 ? "ok" : "bad",
       note:
         metrics.maxDrawdown > -10
           ? "מצוין — ירידת שווי מקסימלית קטנה מ-10%, ניהול סיכון מדהים."

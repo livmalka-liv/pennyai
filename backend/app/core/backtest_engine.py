@@ -116,6 +116,10 @@ def run_backtest(strategy: StrategyConfig) -> BacktestResult:
     last_date = None
 
     for day in sorted(catalyst_days, key=lambda d: d.date):
+        # Stop trading if account is effectively bankrupt
+        if equity <= 0:
+            break
+
         if not day.candles_1m:
             continue
 
@@ -130,6 +134,11 @@ def run_backtest(strategy: StrategyConfig) -> BacktestResult:
         # Liquidity check — skip if can't get meaningful fill
         can_trade, eff_position = _liquidity_check(entry_price_raw, day.day_volume)
         if not can_trade:
+            continue
+
+        # Cap position to available equity — never bet more than we have
+        eff_position = min(eff_position, equity * POSITION_SIZE_PCT)
+        if eff_position < 100:
             continue
 
         # Entry cost: slippage + spread + market impact + commission
@@ -379,18 +388,20 @@ def _calculate_metrics(
     gross_loss = abs(sum(losses)) or 0.001
     profit_factor = gross_profit / gross_loss
 
-    # Max drawdown via equity curve simulation (fixed position sizing matches run_backtest)
+    # Max drawdown via equity curve simulation — matches run_backtest with equity floor
     position_dollars = starting_capital * POSITION_SIZE_PCT
     equity = starting_capital
     peak = equity
     max_dd = 0.0
     for r in returns:
-        equity += position_dollars * (r / 100)
+        pos = min(position_dollars, equity * POSITION_SIZE_PCT)
+        equity = max(0.0, equity + pos * (r / 100))
         if equity > peak:
             peak = equity
-        dd = (peak - equity) / peak * 100
-        if dd > max_dd:
-            max_dd = dd
+        if peak > 0:
+            dd = (peak - equity) / peak * 100
+            if dd > max_dd:
+                max_dd = dd
 
     # Sharpe (annualized, assuming ~252 trading days)
     if len(returns) > 1:
