@@ -15,14 +15,21 @@ const AuthContext = createContext<AuthCtx | null>(null);
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 
 async function authPost(path: string, body: object): Promise<{ access_token: string; tier: string; email: string }> {
-  const res = await fetch(`${API}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (networkErr) {
+    throw new Error(`שגיאת רשת: ${API}${path} — ${networkErr instanceof Error ? networkErr.message : networkErr}`);
+  }
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail ?? "שגיאה");
+    const text = await res.text().catch(() => "");
+    let detail = "";
+    try { detail = JSON.parse(text).detail ?? ""; } catch { detail = text; }
+    throw new Error(detail || `HTTP ${res.status}`);
   }
   return res.json();
 }
