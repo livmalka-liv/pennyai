@@ -10,8 +10,11 @@ from pydantic import BaseModel
 from app.data.database import get_db
 from app.models.db_models import PaperTrade, StrategyTracker, OptimizationResult
 from app.core.live_scanner import STRATEGY_CONFIGS
+from app.core.course_builder import TIER_LIMITS, TIER_PRICE_ILS, EXTRA_STRATEGY_PRICE_ILS
 
 router = APIRouter(prefix="/live-lab", tags=["live-lab"])
+
+FREE_STRATEGY_LIMIT = 3
 
 
 # ─── Pydantic schemas ─────────────────────────────────────────────────────────
@@ -117,21 +120,6 @@ def get_status(db: Session = Depends(get_db)):
         "days_of_data": days_of_data,
         "coach_unlocked": days_of_data >= 90,
     }
-
-
-@router.post("/toggle")
-def toggle_strategy(body: StrategyToggle, db: Session = Depends(get_db)):
-    tracker = db.query(StrategyTracker).filter(StrategyTracker.id == body.strategy_id).first()
-    if not tracker:
-        config = STRATEGY_CONFIGS.get(body.strategy_id)
-        if not config:
-            raise HTTPException(404, "Strategy not found")
-        tracker = StrategyTracker(id=body.strategy_id, name=config["name"], is_active=body.active)
-        db.add(tracker)
-    else:
-        tracker.is_active = body.active
-    db.commit()
-    return {"ok": True, "active": body.active}
 
 
 @router.get("/signals", response_model=list[TradeOut])
@@ -277,4 +265,91 @@ def get_scanner_status():
         "poll_interval_seconds": _poll_interval_seconds,
         "watchlist_size": len(_watchlist),
         "mode": "realtime" if ws_connected else "polling",
+    }
+
+
+# ─── Tier / subscription info ─────────────────────────────────────────────────
+
+@router.get("/tiers")
+def get_tiers():
+    return {
+        "free":    {"strategies": FREE_STRATEGY_LIMIT, "price_ils": 0,   "label": "חינם"},
+        "starter": {"strategies": 15,                  "price_ils": 59,  "label": "Starter"},
+        "pro":     {"strategies": 9999,                "price_ils": 149, "label": "Pro"},
+        "extra_strategy_price_ils": EXTRA_STRATEGY_PRICE_ILS,
+    }
+
+
+@router.post("/toggle")
+def toggle_strategy(body: StrategyToggle, db: Session = Depends(get_db)):
+    """Toggle strategy — enforces FREE_STRATEGY_LIMIT for free-tier users."""
+    # Count currently active strategies
+    if body.active:
+        active_count = db.query(StrategyTracker).filter(StrategyTracker.is_active == True).count()
+        # If enabling and already at limit, default all as active (no auth yet = free tier check UI-side)
+        if active_count >= FREE_STRATEGY_LIMIT:
+            # Check if this one is already there (just re-enabling)
+            existing = db.query(StrategyTracker).filter(StrategyTracker.id == body.strategy_id).first()
+            if not existing or not existing.is_active:
+                raise HTTPException(
+                    status_code=402,
+                    detail={
+                        "code": "STRATEGY_LIMIT",
+                        "message": f"מגבלת {FREE_STRATEGY_LIMIT} אסטרטגיות חינמיות הושגה. שדרג ל-Starter (₪59/חודש) לעד 15 אסטרטגיות.",
+                        "limit": FREE_STRATEGY_LIMIT,
+                        "upgrade_tier": "starter",
+                        "upgrade_price_ils": TIER_PRICE_ILS["starter"],
+                    }
+                )
+
+    tracker = db.query(StrategyTracker).filter(StrategyTracker.id == body.strategy_id).first()
+    if not tracker:
+        config = STRATEGY_CONFIGS.get(body.strategy_id)
+        if not config:
+            raise HTTPException(404, "Strategy not found")
+        tracker = StrategyTracker(id=body.strategy_id, name=config["name"], is_active=body.active)
+        db.add(tracker)
+    else:
+        tracker.is_active = body.active
+    db.commit()
+    return {"ok": True, "active": body.active}
+
+
+# ─── Course Generation ────────────────────────────────────────────────────────
+
+@router.post("/generate-course/{strategy_id}")
+async def generate_course(strategy_id: str, db: Session = Depends(get_db)):
+    """Generate a personalized AI trading course for a strategy using Live Lab data."""
+    config = STRATEGY_CONFIGS.get(strategy_id)
+    if not config:
+        raise HTTPException(404, "Strategy not found")
+
+    from app.core.course_builder import get_strategy_stats, generate_course as _gen
+
+    stats = get_strategy_stats(db, strategy_id)
+    course = await _gen(strategy_id, config, stats)
+    return course
+
+
+@router.get("/course-preview/{strategy_id}")
+def course_preview(strategy_id: str, db: Session = Depends(get_db)):
+    """Quick preview: is the strategy ready for course generation?"""
+    from app.core.course_builder import get_strategy_stats
+    config = STRATEGY_CONFIGS.get(strategy_id)
+    if not config:
+        raise HTTPException(404, "Strategy not found")
+
+    stats = get_strategy_stats(db, strategy_id)
+    ready = stats.get("total_trades", 0) >= 20 and stats.get("win_rate", 0) >= 55
+    return {
+        "strategy_id": strategy_id,
+        "strategy_name": config["name"],
+        "ready": ready,
+        "total_trades": stats.get("total_trades", 0),
+        "win_rate": stats.get("win_rate", 0),
+        "days_tested": stats.get("days_tested", 0),
+        "reason": (
+            "מוכן לבניית קורס!" if ready
+            else f"צריך עוד {max(0, 20 - stats.get('total_trades', 0))} עסקאות ואחוז הצלחה של לפחות 55%"
+        ),
     }

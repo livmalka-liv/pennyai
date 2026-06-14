@@ -267,8 +267,28 @@ export default function LiveLabPage() {
     }, 2000);
   }, []);
 
-  const toggleStrategy = (id: string) => {
+  const FREE_LIMIT = 3;
+  const [upgradePrompt, setUpgradePrompt] = useState(false);
+
+  const toggleStrategy = async (id: string) => {
+    const current = strategies.find(s => s.id === id);
+    if (!current) return;
+    const turningOn = !current.active;
+    const activeCount2 = strategies.filter(s => s.active).length;
+
+    if (turningOn && activeCount2 >= FREE_LIMIT) {
+      setUpgradePrompt(true);
+      return;
+    }
+
     setStrategies(prev => prev.map(s => s.id === id ? { ...s, active: !s.active } : s));
+    try {
+      await fetch(`${API}/live-lab/toggle`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ strategy_id: id, active: turningOn }),
+      });
+    } catch {}
   };
 
   const activeCount = strategies.filter(s => s.active).length;
@@ -361,33 +381,54 @@ export default function LiveLabPage() {
             </p>
           </div>
 
-          <div className="flex-1 p-3 space-y-2">
-            {strategies.map(s => {
+          <div className="flex-1 p-3 space-y-2 overflow-y-auto">
+            {/* Free tier indicator */}
+            <div className="flex items-center justify-between text-[10px] text-[#64748B] px-1 pb-1">
+              <span>{strategies.filter(s => s.active).length}/{FREE_LIMIT} חינמיות פעילות</span>
+              <span className="text-[#6366F1] font-medium cursor-pointer hover:underline" onClick={() => setUpgradePrompt(true)}>
+                שדרג →
+              </span>
+            </div>
+
+            {strategies.map((s, idx) => {
               const wr = s.totalSignals > 0 ? (s.wins / s.totalSignals * 100) : 0;
+              const activeStrategies = strategies.filter(str => str.active);
+              const isLocked = !s.active && activeStrategies.length >= FREE_LIMIT;
+              const courseReady = wr >= 55 && s.totalSignals >= 20;
+
               return (
-                <div
-                  key={s.id}
-                  className={cn(
-                    "rounded-xl border p-3 transition-all cursor-pointer",
-                    s.active ? "border-[#6366F1]/30 bg-[#6366F1]/5" : "border-[#1E293B] bg-[#0F1520]"
-                  )}
-                  onClick={() => toggleStrategy(s.id)}
-                >
+                <div key={s.id} className={cn(
+                  "rounded-xl border p-3 transition-all",
+                  isLocked ? "border-[#1E293B]/50 bg-[#0A0D14] opacity-60" :
+                  s.active ? "border-[#6366F1]/30 bg-[#6366F1]/5" : "border-[#1E293B] bg-[#0F1520]"
+                )}>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-semibold text-[#F8FAFC] truncate pr-2">{s.name}</span>
-                    {/* Toggle */}
-                    <div className={cn(
-                      "relative h-5 w-9 rounded-full transition-colors shrink-0",
-                      s.active ? "bg-[#6366F1]" : "bg-[#334155]"
-                    )}>
-                      <div className={cn(
-                        "absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform",
-                        s.active ? "translate-x-4" : "translate-x-0.5"
-                      )} />
-                    </div>
+                    {isLocked ? (
+                      <button
+                        onClick={() => setUpgradePrompt(true)}
+                        className="flex items-center gap-1 rounded-md bg-[#F59E0B]/10 border border-[#F59E0B]/25 px-2 py-0.5 text-[9px] text-[#F59E0B] font-semibold"
+                      >
+                        <Lock className="h-2.5 w-2.5" /> PRO
+                      </button>
+                    ) : (
+                      <div
+                        onClick={() => toggleStrategy(s.id)}
+                        className={cn(
+                          "relative h-5 w-9 rounded-full transition-colors shrink-0 cursor-pointer",
+                          s.active ? "bg-[#6366F1]" : "bg-[#334155]"
+                        )}
+                      >
+                        <div className={cn(
+                          "absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform",
+                          s.active ? "translate-x-4" : "translate-x-0.5"
+                        )} />
+                      </div>
+                    )}
                   </div>
+
                   {s.totalSignals > 0 && (
-                    <div className="grid grid-cols-3 gap-1 text-center">
+                    <div className="grid grid-cols-3 gap-1 text-center mb-2">
                       <div>
                         <p className={cn("text-sm font-bold tabular-nums", wr >= 50 ? "text-[#10B981]" : "text-[#EF4444]")}>{wr.toFixed(0)}%</p>
                         <p className="text-[9px] text-[#64748B]">WR</p>
@@ -402,6 +443,22 @@ export default function LiveLabPage() {
                         </p>
                         <p className="text-[9px] text-[#64748B]">P&L</p>
                       </div>
+                    </div>
+                  )}
+
+                  {/* Build Course button */}
+                  {courseReady && s.active && (
+                    <a
+                      href={`/course/${s.id}`}
+                      className="flex items-center justify-center gap-1.5 w-full rounded-lg bg-gradient-to-r from-[#6366F1]/20 to-[#8B5CF6]/20 border border-[#6366F1]/30 py-1.5 text-[10px] font-bold text-[#A5B4FC] hover:from-[#6366F1]/30 hover:to-[#8B5CF6]/30 transition-all mt-1"
+                    >
+                      <Brain className="h-3 w-3" /> בנה קורס AI
+                      <span className="text-[#64748B] font-normal">({wr.toFixed(0)}% WR)</span>
+                    </a>
+                  )}
+                  {!courseReady && s.active && s.totalSignals > 0 && (
+                    <div className="text-[9px] text-[#475569] text-center mt-1">
+                      צריך {Math.max(0, 20 - s.totalSignals)} עסקאות נוספות לפתיחת קורס
                     </div>
                   )}
                 </div>
@@ -826,6 +883,76 @@ export default function LiveLabPage() {
                 className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-[#6366F1] py-2 text-sm font-semibold text-white hover:bg-[#5558E8] transition-colors"
               >
                 <Save className="h-3.5 w-3.5" /> שמור הגדרות
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Upgrade Modal ── */}
+      {upgradePrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="relative w-full max-w-md rounded-2xl border border-[#F59E0B]/30 bg-[#0F1520] shadow-2xl mx-4">
+            <button
+              onClick={() => setUpgradePrompt(false)}
+              className="absolute left-4 top-4 rounded-lg p-1.5 text-[#64748B] hover:text-[#F8FAFC] hover:bg-[#1E293B] transition-all"
+            >
+              <X className="h-4 w-4" />
+            </button>
+
+            <div className="p-6 text-center">
+              <div className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-[#F59E0B]/15 border border-[#F59E0B]/30 mb-4">
+                <Zap className="h-7 w-7 text-[#F59E0B]" />
+              </div>
+              <h2 className="text-lg font-bold text-[#F8FAFC] mb-1">הגעת למגבלת החינמי</h2>
+              <p className="text-sm text-[#64748B] mb-5">
+                החבילה החינמית מאפשרת <span className="text-[#F8FAFC] font-semibold">{FREE_LIMIT} אסטרטגיות</span> בו-זמנית.
+                שדרג כדי להריץ יותר אסטרטגיות ולפתוח תכונות מתקדמות.
+              </p>
+
+              <div className="grid grid-cols-2 gap-3 mb-5">
+                {/* Starter plan */}
+                <div className="rounded-xl border border-[#6366F1]/40 bg-[#6366F1]/5 p-4 text-center">
+                  <p className="text-xs font-semibold text-[#6366F1] mb-1">Starter</p>
+                  <p className="text-2xl font-bold text-[#F8FAFC]">₪59</p>
+                  <p className="text-[10px] text-[#64748B] mb-3">/חודש</p>
+                  <ul className="text-[11px] text-[#94A3B8] space-y-1 text-right">
+                    <li>✅ עד 15 אסטרטגיות</li>
+                    <li>✅ AI Optimizer</li>
+                    <li>✅ בניית קורסים</li>
+                    <li>✅ WebSocket real-time</li>
+                  </ul>
+                </div>
+
+                {/* Pro plan */}
+                <div className="rounded-xl border border-[#F59E0B]/40 bg-[#F59E0B]/5 p-4 text-center relative">
+                  <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 rounded-full bg-[#F59E0B] px-2.5 py-0.5 text-[9px] font-bold text-black">
+                    הכי פופולרי
+                  </div>
+                  <p className="text-xs font-semibold text-[#F59E0B] mb-1">Pro</p>
+                  <p className="text-2xl font-bold text-[#F8FAFC]">₪149</p>
+                  <p className="text-[10px] text-[#64748B] mb-3">/חודש</p>
+                  <ul className="text-[11px] text-[#94A3B8] space-y-1 text-right">
+                    <li>✅ אסטרטגיות ללא הגבלה</li>
+                    <li>✅ חיבור ברוקר אמיתי</li>
+                    <li>✅ AI Coach 24/7</li>
+                    <li>✅ מכירת קורסים</li>
+                  </ul>
+                </div>
+              </div>
+
+              <p className="text-[10px] text-[#64748B] mb-4">
+                כל אסטרטגיה נוספת מעל המכסה: <span className="text-[#F8FAFC]">₪12/חודש</span>
+              </p>
+
+              <button className="w-full rounded-xl bg-gradient-to-r from-[#F59E0B] to-[#EF4444] py-3 text-sm font-bold text-white hover:opacity-90 transition-opacity">
+                שדרג עכשיו — 7 ימי ניסיון חינם
+              </button>
+              <button
+                onClick={() => setUpgradePrompt(false)}
+                className="mt-2 w-full py-2 text-xs text-[#64748B] hover:text-[#94A3B8] transition-colors"
+              >
+                המשך עם החינמי
               </button>
             </div>
           </div>
