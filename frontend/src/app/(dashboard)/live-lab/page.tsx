@@ -906,9 +906,19 @@ function SignalCard({ signal: s }: { signal: Signal }) {
         <span>·</span>
         <span>SL <span className="text-[#EF4444] font-mono">${s.slPrice.toFixed(2)}</span></span>
         <span>·</span>
-        <span>float <span className="text-[#94A3B8]">{s.float.toFixed(1)}M</span></span>
+        <span>
+          float{" "}
+          <span className={cn("font-semibold font-mono",
+            s.float < 5  ? "text-[#F59E0B]" :   // ultra-low float = orange
+            s.float < 15 ? "text-[#94A3B8]" :
+            "text-[#64748B]"
+          )}>
+            {s.float.toFixed(1)}M
+          </span>
+          {s.float < 5 && <span className="ml-0.5 text-[#F59E0B]">🔥</span>}
+        </span>
         <span>·</span>
-        <span>rvol <span className="text-[#94A3B8]">{s.rvol.toFixed(1)}x</span></span>
+        <span>rvol <span className={cn("font-mono", s.rvol >= 10 ? "text-[#F59E0B] font-bold" : "text-[#94A3B8]")}>{s.rvol.toFixed(1)}x</span></span>
         <span>·</span>
         <span className="text-[#8B5CF6]">{s.catalyst}</span>
         {s.holdMinutes && <><span>·</span><span>{s.holdMinutes}m</span></>}
@@ -933,15 +943,38 @@ function SignalCard({ signal: s }: { signal: Signal }) {
       )}
 
       {/* P&L badge */}
-      {s.dollarsGain !== undefined && (
+      {s.dollarsGain !== undefined ? (
         <div className={cn(
           "mt-2 inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-bold",
           s.dollarsGain >= 0 ? "bg-[#10B981]/15 text-[#10B981]" : "bg-[#EF4444]/15 text-[#EF4444]"
         )}>
           {s.dollarsGain >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-          {s.dollarsGain >= 0 ? "+" : "-"}${Math.abs(s.dollarsGain).toFixed(0)} · {500 * ((s.returnPct || 0) / 100) >= 0 ? "+" : "-"}${Math.abs(500 * ((s.returnPct || 0) / 100)).toFixed(0)} עם $500/עסקה
+          {s.dollarsGain >= 0 ? "+" : "-"}${Math.abs(s.dollarsGain).toFixed(0)}
+          <span className="opacity-60 font-normal">
+            {" "}({s.returnPct !== undefined ? `${s.returnPct >= 0 ? "+" : ""}${s.returnPct.toFixed(1)}%` : ""})
+          </span>
         </div>
-      )}
+      ) : isOpen && s.currentPrice ? (
+        (() => {
+          const unrealPct = ((s.currentPrice - s.entryPrice) / s.entryPrice) * 100;
+          const unrealUsd = 500 * unrealPct / 100;
+          return (
+            <div className={cn(
+              "mt-2 inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-bold border",
+              unrealPct >= 0
+                ? "bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20"
+                : "bg-[#EF4444]/10 text-[#EF4444] border-[#EF4444]/20"
+            )}>
+              <Activity className="h-3 w-3 animate-pulse" />
+              רווח/הפסד לא סגור:{" "}
+              {unrealPct >= 0 ? "+" : ""}{unrealPct.toFixed(1)}%
+              <span className="opacity-70">
+                ({unrealUsd >= 0 ? "+" : "-"}${Math.abs(unrealUsd).toFixed(0)})
+              </span>
+            </div>
+          );
+        })()
+      ) : null}
     </div>
   );
 }
