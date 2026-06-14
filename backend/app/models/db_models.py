@@ -1,8 +1,19 @@
 """SQLAlchemy ORM models for Live Lab persistent storage."""
 
 from datetime import datetime
-from sqlalchemy import Column, String, Float, Integer, Boolean, DateTime, Text, JSON
+from sqlalchemy import Column, String, Float, Integer, Boolean, DateTime, Text, JSON, ForeignKey
 from app.data.database import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id                 = Column(String, primary_key=True)
+    email              = Column(String, unique=True, nullable=False, index=True)
+    password_hash      = Column(String, nullable=False)
+    tier               = Column(String, default="free")   # free | starter | pro
+    stripe_customer_id = Column(String)
+    created_at         = Column(DateTime, default=datetime.utcnow)
 
 
 class PaperTrade(Base):
@@ -42,9 +53,10 @@ class StrategyTracker(Base):
     __tablename__ = "strategy_trackers"
 
     id             = Column(String, primary_key=True)
+    user_id        = Column(String, index=True)   # NULL = legacy global row
     name           = Column(String, nullable=False)
     is_active      = Column(Boolean, default=True)
-    config_json    = Column(JSON)    # full StrategyConfig
+    config_json    = Column(JSON)
     started_at     = Column(DateTime, default=datetime.utcnow)
     paused_at      = Column(DateTime)
 

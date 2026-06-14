@@ -8,9 +8,10 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.data.database import get_db
-from app.models.db_models import PaperTrade, StrategyTracker, OptimizationResult
+from app.models.db_models import PaperTrade, StrategyTracker, OptimizationResult, User
 from app.core.live_scanner import STRATEGY_CONFIGS
-from app.core.course_builder import TIER_LIMITS, TIER_PRICE_ILS, EXTRA_STRATEGY_PRICE_ILS
+from app.core.course_builder import TIER_PRICE_ILS, EXTRA_STRATEGY_PRICE_ILS
+from app.core.auth import get_optional_user
 
 router = APIRouter(prefix="/live-lab", tags=["live-lab"])
 
@@ -281,33 +282,53 @@ def get_tiers():
 
 
 @router.post("/toggle")
-def toggle_strategy(body: StrategyToggle, db: Session = Depends(get_db)):
-    """Toggle strategy — enforces FREE_STRATEGY_LIMIT for free-tier users."""
-    # Count currently active strategies
+def toggle_strategy(
+    body: StrategyToggle,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_optional_user),
+):
+    """Toggle strategy — enforces per-user tier limits for authenticated users."""
+    uid = current_user.id if current_user else None
+    tier = (current_user.tier if current_user else "free") or "free"
+
+    tier_limits = {"free": FREE_STRATEGY_LIMIT, "starter": 15, "pro": 9999}
+    limit = tier_limits.get(tier, FREE_STRATEGY_LIMIT)
+
     if body.active:
-        active_count = db.query(StrategyTracker).filter(StrategyTracker.is_active == True).count()
-        # If enabling and already at limit, default all as active (no auth yet = free tier check UI-side)
-        if active_count >= FREE_STRATEGY_LIMIT:
-            # Check if this one is already there (just re-enabling)
-            existing = db.query(StrategyTracker).filter(StrategyTracker.id == body.strategy_id).first()
+        q = db.query(StrategyTracker).filter(StrategyTracker.is_active == True)
+        if uid:
+            q = q.filter(StrategyTracker.user_id == uid)
+        active_count = q.count()
+
+        if active_count >= limit:
+            existing_q = db.query(StrategyTracker).filter(StrategyTracker.id == body.strategy_id)
+            if uid:
+                existing_q = existing_q.filter(StrategyTracker.user_id == uid)
+            existing = existing_q.first()
             if not existing or not existing.is_active:
                 raise HTTPException(
                     status_code=402,
                     detail={
                         "code": "STRATEGY_LIMIT",
-                        "message": f"מגבלת {FREE_STRATEGY_LIMIT} אסטרטגיות חינמיות הושגה. שדרג ל-Starter (₪59/חודש) לעד 15 אסטרטגיות.",
-                        "limit": FREE_STRATEGY_LIMIT,
+                        "message": f"מגבלת {limit} אסטרטגיות הושגה. שדרג ל-Starter (₪59/חודש) לעד 15 אסטרטגיות.",
+                        "limit": limit,
                         "upgrade_tier": "starter",
                         "upgrade_price_ils": TIER_PRICE_ILS["starter"],
                     }
                 )
 
-    tracker = db.query(StrategyTracker).filter(StrategyTracker.id == body.strategy_id).first()
+    tracker_id = f"{uid}:{body.strategy_id}" if uid else body.strategy_id
+    tracker = db.query(StrategyTracker).filter(StrategyTracker.id == tracker_id).first()
     if not tracker:
         config = STRATEGY_CONFIGS.get(body.strategy_id)
         if not config:
             raise HTTPException(404, "Strategy not found")
-        tracker = StrategyTracker(id=body.strategy_id, name=config["name"], is_active=body.active)
+        tracker = StrategyTracker(
+            id=tracker_id,
+            user_id=uid,
+            name=config["name"],
+            is_active=body.active,
+        )
         db.add(tracker)
     else:
         tracker.is_active = body.active

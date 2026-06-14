@@ -6,6 +6,7 @@ from app.api.backtest import router as backtest_router
 from app.api.strategies import router as strategies_router
 from app.api.data_admin import router as data_router
 from app.api.routes.live_lab import router as live_lab_router
+from app.api.routes.auth import router as auth_router
 from app.core.config import get_settings
 from app.data.database import init_db
 from app.core.scheduler import start_scheduler
@@ -43,6 +44,7 @@ app.include_router(backtest_router, prefix="/api/v1")
 app.include_router(strategies_router, prefix="/api/v1")
 app.include_router(data_router, prefix="/api/v1")
 app.include_router(live_lab_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/v1")
 
 
 @app.get("/health")
