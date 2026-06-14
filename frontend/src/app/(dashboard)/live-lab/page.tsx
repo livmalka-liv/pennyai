@@ -187,7 +187,7 @@ export default function LiveLabPage() {
       const saved = localStorage.getItem("livelab_settings");
       if (saved) return JSON.parse(saved);
     }
-    return { startHour: "11", endHour: "23", intervalSec: "30" };
+    return { startHour: "11", endHour: "23", intervalSec: "30", testingDays: "90" };
   });
   const [pendingSettings, setPendingSettings] = useState(scanSettings);
 
@@ -297,7 +297,9 @@ export default function LiveLabPage() {
   const totalWins = strategies.filter(s => s.active).reduce((sum, s) => sum + s.wins, 0);
   const overallWr = totalTrades > 0 ? (totalWins / totalTrades * 100) : 0;
   const daysOfData = 21;
-  const coachUnlocked = daysOfData >= 90;
+  const testingGoalDays = parseInt(scanSettings.testingDays ?? "90");
+  const testingProgress = Math.min(100, (daysOfData / testingGoalDays) * 100);
+  const coachUnlocked = daysOfData >= testingGoalDays;
 
   // Session now
   const hour = new Date().getHours(); // local — simplified
@@ -592,13 +594,44 @@ export default function LiveLabPage() {
           </div>
 
           <div className="flex-1 p-3 space-y-3 overflow-y-auto">
+            {/* Testing period progress */}
+            <div className="rounded-xl border border-[#6366F1]/25 bg-[#6366F1]/5 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[10px] font-semibold text-[#6366F1] uppercase tracking-wider">תקופת בדיקה</p>
+                <span className="text-[10px] text-[#94A3B8]">
+                  יום {daysOfData} מתוך {testingGoalDays}
+                </span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-[#1E293B] overflow-hidden mb-2">
+                <div
+                  className={cn(
+                    "h-2 rounded-full transition-all duration-700",
+                    testingProgress >= 100 ? "bg-[#10B981]" :
+                    testingProgress >= 66 ? "bg-[#6366F1]" :
+                    testingProgress >= 33 ? "bg-[#F59E0B]" : "bg-[#64748B]"
+                  )}
+                  style={{ width: `${testingProgress}%` }}
+                />
+              </div>
+              <div className="flex items-center justify-between text-[9px]">
+                <span className="text-[#64748B]">
+                  {coachUnlocked
+                    ? "✅ הבדיקה הושלמה — ניתן לייצר קורס"
+                    : `עוד ${testingGoalDays - daysOfData} ימים לסיום`}
+                </span>
+                <span className={cn("font-bold", testingProgress >= 100 ? "text-[#10B981]" : "text-[#6366F1]")}>
+                  {Math.round(testingProgress)}%
+                </span>
+              </div>
+            </div>
+
             {/* Summary KPIs */}
             <div className="grid grid-cols-2 gap-2">
               {[
                 { label: "P&L כולל", value: formatCurrency(totalPnl), color: totalPnl >= 0 ? "text-[#10B981]" : "text-[#EF4444]" },
                 { label: "אחוז הצלחה", value: `${overallWr.toFixed(1)}%`, color: overallWr >= 50 ? "text-[#10B981]" : "text-[#EF4444]" },
                 { label: "סה\"כ עסקאות", value: String(totalTrades), color: "text-[#F8FAFC]" },
-                { label: "ימי מעקב", value: `${daysOfData} ימים`, color: "text-[#94A3B8]" },
+                { label: "ימי מעקב", value: `${daysOfData}/${testingGoalDays}`, color: "text-[#94A3B8]" },
               ].map(k => (
                 <div key={k.label} className="rounded-lg border border-[#1E293B] bg-[#0F1520] p-2.5 text-center">
                   <p className={cn("text-base font-bold tabular-nums", k.color)}>{k.value}</p>
@@ -840,18 +873,50 @@ export default function LiveLabPage() {
                 </p>
               </div>
 
+              {/* Testing duration */}
+              <div>
+                <p className="text-xs font-semibold text-[#94A3B8] uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <Clock className="h-3.5 w-3.5 text-[#6366F1]" /> משך תקופת בדיקה
+                </p>
+                <p className="text-[10px] text-[#64748B] mb-2">
+                  כמה זמן תרוץ הבדיקה לפני שתוכל לייצר קורס ולבצע החלטות? יותר זמן = נתונים אמינים יותר.
+                </p>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {[
+                    { val: "7",   label: "7 ימים",   sub: "מהיר" },
+                    { val: "30",  label: "30 יום",   sub: "בסיסי" },
+                    { val: "60",  label: "60 יום",   sub: "טוב" },
+                    { val: "90",  label: "90 יום",   sub: "✅ מומלץ" },
+                    { val: "180", label: "6 חודשים", sub: "מקצועי" },
+                    { val: "365", label: "שנה",      sub: "אמין מאוד" },
+                  ].map(({ val, label, sub }) => (
+                    <button
+                      key={val}
+                      onClick={() => setPendingSettings((p: typeof scanSettings) => ({ ...p, testingDays: val }))}
+                      className={cn(
+                        "rounded-lg border py-2 text-center transition-all",
+                        pendingSettings.testingDays === val
+                          ? "border-[#6366F1] bg-[#6366F1]/15 text-[#6366F1]"
+                          : "border-[#1E293B] bg-[#0B0E14] text-[#64748B] hover:border-[#334155] hover:text-[#94A3B8]"
+                      )}
+                    >
+                      <div className="text-xs font-bold">{label}</div>
+                      <div className="text-[9px] opacity-70">{sub}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* Summary */}
               <div className="rounded-lg border border-[#6366F1]/20 bg-[#6366F1]/5 p-3">
                 <p className="text-[10px] text-[#6366F1] font-semibold mb-1">תקציר ההגדרה</p>
                 <p className="text-xs text-[#94A3B8]">
-                  <span className="text-[#22C55E] font-semibold">WebSocket Real-Time</span> + REST fallback כל{" "}
-                  <span className="text-[#F8FAFC] font-medium">
-                    {parseInt(pendingSettings.intervalSec) < 60
-                      ? `${pendingSettings.intervalSec} שניות`
-                      : `${Math.round(parseInt(pendingSettings.intervalSec) / 60)} דקות`}
-                  </span>{" "}
-                  בין <span className="text-[#F8FAFC] font-medium">{pendingSettings.startHour.padStart(2,"0")}:00</span> ל-
-                  <span className="text-[#F8FAFC] font-medium">{pendingSettings.endHour.padStart(2,"0")}:00</span> שעון ישראל
+                  <span className="text-[#22C55E] font-semibold">WebSocket Real-Time</span> · בין{" "}
+                  <span className="text-[#F8FAFC] font-medium">{pendingSettings.startHour.padStart(2,"0")}:00</span> ל-
+                  <span className="text-[#F8FAFC] font-medium">{pendingSettings.endHour.padStart(2,"0")}:00</span> ·{" "}
+                  תקופת בדיקה: <span className="text-[#F8FAFC] font-medium">
+                    {pendingSettings.testingDays === "365" ? "שנה" : pendingSettings.testingDays === "180" ? "6 חודשים" : `${pendingSettings.testingDays} יום`}
+                  </span>
                 </p>
               </div>
             </div>
