@@ -8,6 +8,7 @@ import {
   Clock, Target, Zap, BarChart2, Award, AlertTriangle,
   ChevronRight, Brain, Lock, Radio, Sun, Sunset,
   Moon, DollarSign, CheckCircle, XCircle, MinusCircle,
+  Settings, X, Save,
 } from "lucide-react";
 import { cn, formatPercent, formatCurrency } from "@/lib/utils";
 
@@ -180,6 +181,15 @@ export default function LiveLabPage() {
   const [activeTab, setActiveTab] = useState<"signals" | "heatmap">("signals");
   const [israelTime, setIsraelTime] = useState("");
   const [demoMode, setDemoMode] = useState(true); // true until real data arrives
+  const [showSettings, setShowSettings] = useState(false);
+  const [scanSettings, setScanSettings] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("livelab_settings");
+      if (saved) return JSON.parse(saved);
+    }
+    return { startHour: "11", endHour: "23", intervalMin: "5" };
+  });
+  const [pendingSettings, setPendingSettings] = useState(scanSettings);
 
   // Update Israel clock
   useEffect(() => {
@@ -301,6 +311,13 @@ export default function LiveLabPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setPendingSettings(scanSettings); setShowSettings(true); }}
+            className="flex items-center gap-1.5 rounded-lg border border-[#1E293B] bg-[#131A26] px-3 py-1.5 text-xs font-medium text-[#94A3B8] hover:border-[#6366F1]/40 hover:text-[#F8FAFC] transition-all"
+          >
+            <Settings className="h-3.5 w-3.5" />
+            {scanSettings.startHour}:00–{scanSettings.endHour}:00 · כל {scanSettings.intervalMin}′
+          </button>
           <button
             onClick={triggerScan}
             disabled={scanning}
@@ -649,6 +666,161 @@ export default function LiveLabPage() {
         </aside>
 
       </div>
+    </div>
+  );
+}
+
+      {/* ── Settings Modal ── */}
+      {showSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="w-96 rounded-2xl border border-[#1E293B] bg-[#0F1520] shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-[#1E293B] px-5 py-4">
+              <div className="flex items-center gap-2">
+                <Settings className="h-4 w-4 text-[#6366F1]" />
+                <p className="text-sm font-bold text-[#F8FAFC]">הגדרות סריקה</p>
+              </div>
+              <button onClick={() => setShowSettings(false)} className="text-[#64748B] hover:text-[#F8FAFC] transition-colors">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-5">
+              {/* Time range */}
+              <div>
+                <p className="text-xs font-semibold text-[#94A3B8] uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                  <Clock className="h-3.5 w-3.5 text-[#6366F1]" /> שעות פעילות (שעון ישראל)
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] text-[#64748B] block mb-1">התחלה</label>
+                    <select
+                      value={pendingSettings.startHour}
+                      onChange={e => setPendingSettings(p => ({ ...p, startHour: e.target.value }))}
+                      className="w-full rounded-lg border border-[#1E293B] bg-[#0B0E14] px-3 py-2 text-sm text-[#F8FAFC] focus:border-[#6366F1]/50 focus:outline-none"
+                    >
+                      {Array.from({ length: 13 }, (_, i) => i + 9).map(h => (
+                        <option key={h} value={String(h)}>{String(h).padStart(2,"0")}:00</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-[#64748B] block mb-1">סיום</label>
+                    <select
+                      value={pendingSettings.endHour}
+                      onChange={e => setPendingSettings(p => ({ ...p, endHour: e.target.value }))}
+                      className="w-full rounded-lg border border-[#1E293B] bg-[#0B0E14] px-3 py-2 text-sm text-[#F8FAFC] focus:border-[#6366F1]/50 focus:outline-none"
+                    >
+                      {Array.from({ length: 16 }, (_, i) => i + 10).map(h => (
+                        <option key={h} value={String(h)}>{String(h).padStart(2,"0")}:00</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                {/* Visual timeline */}
+                <div className="mt-3 rounded-lg bg-[#0B0E14] p-3">
+                  <div className="flex justify-between text-[9px] text-[#64748B] mb-1">
+                    <span>09:00</span><span>13:00</span><span>17:00</span><span>21:00</span><span>01:00</span>
+                  </div>
+                  <div className="h-3 w-full rounded bg-[#1E293B] relative">
+                    {/* Pre-market zone 11-16:30 */}
+                    <div className="absolute h-full bg-[#F59E0B]/20 rounded" style={{ left: "16.7%", width: "22.9%" }} />
+                    {/* Regular zone 16:30-23 */}
+                    <div className="absolute h-full bg-[#10B981]/20 rounded" style={{ left: "39.6%", width: "27.1%" }} />
+                    {/* Selected range */}
+                    <div
+                      className="absolute h-full bg-[#6366F1]/60 rounded transition-all"
+                      style={{
+                        left: `${((parseInt(pendingSettings.startHour) - 9) / 16) * 100}%`,
+                        width: `${((parseInt(pendingSettings.endHour) - parseInt(pendingSettings.startHour)) / 16) * 100}%`,
+                      }}
+                    />
+                  </div>
+                  <div className="flex gap-3 mt-2">
+                    <span className="text-[9px] flex items-center gap-1"><span className="h-2 w-2 rounded bg-[#F59E0B]/40 inline-block" />פרי-מרקט</span>
+                    <span className="text-[9px] flex items-center gap-1"><span className="h-2 w-2 rounded bg-[#10B981]/40 inline-block" />שוק רגיל</span>
+                    <span className="text-[9px] flex items-center gap-1 text-[#6366F1]"><span className="h-2 w-2 rounded bg-[#6366F1]/60 inline-block" />הגדרה שלך</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Scan interval */}
+              <div>
+                <p className="text-xs font-semibold text-[#94A3B8] uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                  <RefreshCw className="h-3.5 w-3.5 text-[#6366F1]" /> תדירות סריקה
+                </p>
+                <div className="grid grid-cols-4 gap-2">
+                  {["1", "5", "10", "15"].map(m => (
+                    <button
+                      key={m}
+                      onClick={() => setPendingSettings(p => ({ ...p, intervalMin: m }))}
+                      className={cn(
+                        "rounded-lg border py-2 text-sm font-semibold transition-all",
+                        pendingSettings.intervalMin === m
+                          ? "border-[#6366F1] bg-[#6366F1]/15 text-[#6366F1]"
+                          : "border-[#1E293B] bg-[#0B0E14] text-[#64748B] hover:border-[#334155] hover:text-[#94A3B8]"
+                      )}
+                    >
+                      {m}′
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-[10px] text-[#64748B]">
+                  {pendingSettings.intervalMin === "1"
+                    ? "⚡ כמעט בזמן אמת — מתאים לסוחרי סקאלפ"
+                    : pendingSettings.intervalMin === "5"
+                    ? "✅ מומלץ — איזון בין עדכניות וביצועי שרת"
+                    : pendingSettings.intervalMin === "10"
+                    ? "🔋 חסכוני — מתאים לסוחרי סוויינג"
+                    : "⏱ אחת ל-15 דקות — נמוך ביותר בצריכת משאבים"
+                  }
+                </p>
+              </div>
+
+              {/* Summary */}
+              <div className="rounded-lg border border-[#6366F1]/20 bg-[#6366F1]/5 p-3">
+                <p className="text-[10px] text-[#6366F1] font-semibold mb-1">תקציר ההגדרה</p>
+                <p className="text-xs text-[#94A3B8]">
+                  סריקה כל <span className="text-[#F8FAFC] font-medium">{pendingSettings.intervalMin} דקות</span> בין{" "}
+                  <span className="text-[#F8FAFC] font-medium">{pendingSettings.startHour.padStart(2,"0")}:00</span> ל-
+                  <span className="text-[#F8FAFC] font-medium">{pendingSettings.endHour.padStart(2,"0")}:00</span> שעון ישראל
+                  {" "}({Math.round((parseInt(pendingSettings.endHour) - parseInt(pendingSettings.startHour)) * 60 / parseInt(pendingSettings.intervalMin))} סריקות ביום)
+                </p>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex gap-2 border-t border-[#1E293B] px-5 py-4">
+              <button
+                onClick={() => setShowSettings(false)}
+                className="flex-1 rounded-lg border border-[#1E293B] py-2 text-sm text-[#64748B] hover:text-[#94A3B8] transition-colors"
+              >
+                ביטול
+              </button>
+              <button
+                onClick={() => {
+                  setScanSettings(pendingSettings);
+                  localStorage.setItem("livelab_settings", JSON.stringify(pendingSettings));
+                  // Send to backend
+                  fetch(`${API}/live-lab/settings`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      start_hour: parseInt(pendingSettings.startHour),
+                      end_hour: parseInt(pendingSettings.endHour),
+                      interval_minutes: parseInt(pendingSettings.intervalMin),
+                    }),
+                  }).catch(() => {});
+                  setShowSettings(false);
+                }}
+                className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-[#6366F1] py-2 text-sm font-semibold text-white hover:bg-[#5558E8] transition-colors"
+              >
+                <Save className="h-3.5 w-3.5" /> שמור הגדרות
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
