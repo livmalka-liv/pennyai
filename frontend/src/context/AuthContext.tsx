@@ -12,7 +12,7 @@ interface AuthCtx {
 }
 
 const AuthContext = createContext<AuthCtx | null>(null);
-const API = process.env.NEXT_PUBLIC_API_URL ?? "https://pennyai-backend-production.up.railway.app/api/v1";
+const API = (process.env.NEXT_PUBLIC_API_URL || "https://pennyai-backend-production.up.railway.app/api/v1").replace(/\/$/, "");
 
 async function authPost(path: string, body: object): Promise<{ access_token: string; tier: string; email: string }> {
   let res: Response;
