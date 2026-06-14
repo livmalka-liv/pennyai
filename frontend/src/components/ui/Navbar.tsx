@@ -12,6 +12,7 @@ const navLinks = [
   { href: "/sandbox",  label: "Sandbox" },
   { href: "/library",  label: "Strategy Library" },
   { href: "/live-lab", label: "Live Lab 🔴" },
+  { href: "/brokers",  label: "Brokers 🔌" },
   { href: "/vault",    label: "Strategy Vault" },
   { href: "/academy",  label: "Academy" },
 ];

@@ -61,6 +61,45 @@ class StrategyTracker(Base):
     paused_at      = Column(DateTime)
 
 
+class BrokerConnection(Base):
+    """A user's connection to a live broker."""
+    __tablename__ = "broker_connections"
+
+    id                  = Column(String, primary_key=True)
+    user_id             = Column(String, nullable=False, index=True)
+    broker_type         = Column(String, nullable=False)   # ibkr | colmex | alpaca
+    label               = Column(String)                   # user-given name, e.g. "IBKR Paper"
+    account_id          = Column(String)
+    credentials_enc     = Column(Text)                     # Fernet-encrypted JSON
+    status              = Column(String, default="disconnected")  # connected | disconnected | error
+    last_tested_at      = Column(DateTime)
+    auto_execute        = Column(Boolean, default=False)   # auto-send signals as real orders
+    last_error          = Column(Text)
+    created_at          = Column(DateTime, default=datetime.utcnow)
+
+
+class BrokerOrder(Base):
+    """Real order sent to a broker from a Live Lab signal."""
+    __tablename__ = "broker_orders"
+
+    id              = Column(String, primary_key=True)
+    user_id         = Column(String, nullable=False, index=True)
+    broker_conn_id  = Column(String, nullable=False)
+    paper_trade_id  = Column(String, index=True)    # linked PaperTrade signal
+    broker_order_id = Column(String)                # broker's own order ID
+    ticker          = Column(String, nullable=False)
+    side            = Column(String)                # buy | sell
+    qty             = Column(Integer)
+    order_type      = Column(String, default="market")
+    limit_price     = Column(Float)
+    status          = Column(String, default="pending")   # pending | filled | rejected | cancelled
+    fill_price      = Column(Float)
+    fill_qty        = Column(Integer)
+    submitted_at    = Column(DateTime, default=datetime.utcnow)
+    filled_at       = Column(DateTime)
+    error_msg       = Column(Text)
+
+
 class OptimizationResult(Base):
     """AI-suggested parameter improvements found during forward testing."""
     __tablename__ = "optimization_results"

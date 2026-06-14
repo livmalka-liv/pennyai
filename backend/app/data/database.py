@@ -24,5 +24,5 @@ def get_db():
 
 
 def init_db():
-    from app.models.db_models import User, PaperTrade, StrategyTracker, OptimizationResult  # noqa
+    from app.models.db_models import User, PaperTrade, StrategyTracker, OptimizationResult, BrokerConnection, BrokerOrder  # noqa
     Base.metadata.create_all(bind=engine)
