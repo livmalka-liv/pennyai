@@ -114,15 +114,13 @@ export async function getVaultStrategies(tier = "free") {
   return apiFetch<any[]>(`/strategies/vault?tier=${tier}`);
 }
 
-export async function createCheckout(tier: string, billing: "monthly" | "yearly", userId: string) {
+export async function createCheckout(tier: string, billing: "monthly" | "yearly") {
   return apiFetch<{ url: string }>("/stripe/create-checkout", {
     method: "POST",
-    body: JSON.stringify({
-      tier,
-      billing,
-      user_id: userId,
-      success_url: `${window.location.origin}/sandbox?upgraded=1`,
-      cancel_url: `${window.location.origin}/vault`,
-    }),
+    body: JSON.stringify({ tier, billing }),
   });
+}
+
+export async function getBillingPortal() {
+  return apiFetch<{ url: string }>("/stripe/portal");
 }

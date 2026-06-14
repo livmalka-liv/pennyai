@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { TrendingUp, Crown, LogOut, ChevronDown } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useState, useRef, useEffect } from "react";
+import UpgradeModal from "@/components/ui/UpgradeModal";
 
 const navLinks = [
   { href: "/sandbox",  label: "Sandbox" },
@@ -24,6 +25,7 @@ const TIER_LABEL: Record<string, { label: string; color: string; bg: string }> =
 function UserMenu() {
   const { user, logout } = useAuth();
   const [open, setOpen] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -51,6 +53,8 @@ function UserMenu() {
   const initials = user.email[0].toUpperCase();
 
   return (
+    <>
+    <UpgradeModal open={upgradeOpen} onClose={() => setUpgradeOpen(false)} />
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen(!open)}
@@ -75,14 +79,13 @@ function UserMenu() {
           </div>
 
           {user.tier === "free" && (
-            <Link
-              href="/vault"
-              onClick={() => setOpen(false)}
-              className="flex items-center gap-2 px-3 py-2.5 text-xs text-[#6366F1] hover:bg-[#6366F1]/10 transition-colors border-b border-[#1E293B]"
+            <button
+              onClick={() => { setOpen(false); setUpgradeOpen(true); }}
+              className="flex w-full items-center gap-2 px-3 py-2.5 text-xs text-[#6366F1] hover:bg-[#6366F1]/10 transition-colors border-b border-[#1E293B]"
             >
               <Crown className="h-3.5 w-3.5" />
               שדרג ל-Starter — ₪59/חודש
-            </Link>
+            </button>
           )}
 
           <button
@@ -95,6 +98,7 @@ function UserMenu() {
         </div>
       )}
     </div>
+    </>
   );
 }
 

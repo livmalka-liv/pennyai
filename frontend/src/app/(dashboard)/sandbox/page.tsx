@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import ChatPanel from "@/components/sandbox/ChatPanel";
 import AnalyticsPanel from "@/components/sandbox/AnalyticsPanel";
+import UpgradeSuccess from "./UpgradeSuccess";
 import type { BacktestResult, StrategyConfig, LookbackYears } from "@/types";
 
 export default function SandboxPage() {
@@ -25,6 +26,7 @@ export default function SandboxPage() {
 
   return (
     <div className="flex h-[calc(100vh-56px)] overflow-hidden">
+      <Suspense><UpgradeSuccess /></Suspense>
       <div className="w-[440px] shrink-0 border-r border-[#1E293B] flex flex-col">
         <ChatPanel
           onBacktestResult={setResult}
