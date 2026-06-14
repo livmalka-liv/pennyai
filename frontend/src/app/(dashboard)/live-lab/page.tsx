@@ -187,7 +187,7 @@ export default function LiveLabPage() {
       const saved = localStorage.getItem("livelab_settings");
       if (saved) return JSON.parse(saved);
     }
-    return { startHour: "11", endHour: "23", intervalMin: "5" };
+    return { startHour: "11", endHour: "23", intervalSec: "30" };
   });
   const [pendingSettings, setPendingSettings] = useState(scanSettings);
 
@@ -316,7 +316,7 @@ export default function LiveLabPage() {
             className="flex items-center gap-1.5 rounded-lg border border-[#1E293B] bg-[#131A26] px-3 py-1.5 text-xs font-medium text-[#94A3B8] hover:border-[#6366F1]/40 hover:text-[#F8FAFC] transition-all"
           >
             <Settings className="h-3.5 w-3.5" />
-            {scanSettings.startHour}:00–{scanSettings.endHour}:00 · כל {scanSettings.intervalMin}′
+            {scanSettings.startHour}:00–{scanSettings.endHour}:00 · כל {parseInt(scanSettings.intervalSec) < 60 ? `${scanSettings.intervalSec}ש` : `${Math.round(parseInt(scanSettings.intervalSec)/60)}′`}
           </button>
           <button
             onClick={triggerScan}
@@ -743,34 +743,43 @@ export default function LiveLabPage() {
 
               {/* Scan interval */}
               <div>
-                <p className="text-xs font-semibold text-[#94A3B8] uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                  <RefreshCw className="h-3.5 w-3.5 text-[#6366F1]" /> תדירות סריקה
+                <p className="text-xs font-semibold text-[#94A3B8] uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <RefreshCw className="h-3.5 w-3.5 text-[#6366F1]" /> תדירות סריקה (Fallback REST)
                 </p>
-                <div className="grid grid-cols-4 gap-2">
-                  {["1", "5", "10", "15"].map(m => (
+                <div className="rounded-lg border border-[#22C55E]/20 bg-[#22C55E]/5 px-3 py-2 mb-3 flex items-center gap-2">
+                  <Radio className="h-3.5 w-3.5 text-[#22C55E] animate-pulse flex-shrink-0" />
+                  <p className="text-[11px] text-[#22C55E] font-medium">
+                    WebSocket פעיל — בדיקה כל שנייה בזמן אמת מ-Polygon.io
+                  </p>
+                </div>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {[
+                    { val: "5",   label: "5ש",   desc: "⚡ אולטרה מהיר" },
+                    { val: "10",  label: "10ש",  desc: "⚡ מהיר מאוד" },
+                    { val: "30",  label: "30ש",  desc: "✅ מומלץ" },
+                    { val: "60",  label: "1′",   desc: "🔋 חסכוני" },
+                    { val: "300", label: "5′",   desc: "⏱ נמוך" },
+                  ].map(({ val, label }) => (
                     <button
-                      key={m}
-                      onClick={() => setPendingSettings((p: typeof scanSettings) => ({ ...p, intervalMin: m }))}
+                      key={val}
+                      onClick={() => setPendingSettings((p: typeof scanSettings) => ({ ...p, intervalSec: val }))}
                       className={cn(
-                        "rounded-lg border py-2 text-sm font-semibold transition-all",
-                        pendingSettings.intervalMin === m
+                        "rounded-lg border py-2 text-xs font-bold transition-all",
+                        pendingSettings.intervalSec === val
                           ? "border-[#6366F1] bg-[#6366F1]/15 text-[#6366F1]"
                           : "border-[#1E293B] bg-[#0B0E14] text-[#64748B] hover:border-[#334155] hover:text-[#94A3B8]"
                       )}
                     >
-                      {m}′
+                      {label}
                     </button>
                   ))}
                 </div>
                 <p className="mt-2 text-[10px] text-[#64748B]">
-                  {pendingSettings.intervalMin === "1"
-                    ? "⚡ כמעט בזמן אמת — מתאים לסוחרי סקאלפ"
-                    : pendingSettings.intervalMin === "5"
-                    ? "✅ מומלץ — איזון בין עדכניות וביצועי שרת"
-                    : pendingSettings.intervalMin === "10"
-                    ? "🔋 חסכוני — מתאים לסוחרי סוויינג"
-                    : "⏱ אחת ל-15 דקות — נמוך ביותר בצריכת משאבים"
-                  }
+                  {pendingSettings.intervalSec === "5"   ? "⚡ 5 שניות — REST fallback כשה-WebSocket לא זמין"
+                  : pendingSettings.intervalSec === "10"  ? "⚡ 10 שניות — REST fallback מהיר מאוד"
+                  : pendingSettings.intervalSec === "30"  ? "✅ 30 שניות — מומלץ לסוחרי יום"
+                  : pendingSettings.intervalSec === "60"  ? "🔋 דקה — חסכוני, מתאים לסוויינג"
+                  : "⏱ 5 דקות — מינימלי, רק לאסטרטגיות ארוכות טווח"}
                 </p>
               </div>
 
@@ -778,10 +787,14 @@ export default function LiveLabPage() {
               <div className="rounded-lg border border-[#6366F1]/20 bg-[#6366F1]/5 p-3">
                 <p className="text-[10px] text-[#6366F1] font-semibold mb-1">תקציר ההגדרה</p>
                 <p className="text-xs text-[#94A3B8]">
-                  סריקה כל <span className="text-[#F8FAFC] font-medium">{pendingSettings.intervalMin} דקות</span> בין{" "}
-                  <span className="text-[#F8FAFC] font-medium">{pendingSettings.startHour.padStart(2,"0")}:00</span> ל-
+                  <span className="text-[#22C55E] font-semibold">WebSocket Real-Time</span> + REST fallback כל{" "}
+                  <span className="text-[#F8FAFC] font-medium">
+                    {parseInt(pendingSettings.intervalSec) < 60
+                      ? `${pendingSettings.intervalSec} שניות`
+                      : `${Math.round(parseInt(pendingSettings.intervalSec) / 60)} דקות`}
+                  </span>{" "}
+                  בין <span className="text-[#F8FAFC] font-medium">{pendingSettings.startHour.padStart(2,"0")}:00</span> ל-
                   <span className="text-[#F8FAFC] font-medium">{pendingSettings.endHour.padStart(2,"0")}:00</span> שעון ישראל
-                  {" "}({Math.round((parseInt(pendingSettings.endHour) - parseInt(pendingSettings.startHour)) * 60 / parseInt(pendingSettings.intervalMin))} סריקות ביום)
                 </p>
               </div>
             </div>
@@ -805,7 +818,7 @@ export default function LiveLabPage() {
                     body: JSON.stringify({
                       start_hour: parseInt(pendingSettings.startHour),
                       end_hour: parseInt(pendingSettings.endHour),
-                      interval_minutes: parseInt(pendingSettings.intervalMin),
+                      interval_seconds: parseInt(pendingSettings.intervalSec),
                     }),
                   }).catch(() => {});
                   setShowSettings(false);

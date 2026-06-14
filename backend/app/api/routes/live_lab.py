@@ -239,42 +239,42 @@ def trigger_optimization(db: Session = Depends(get_db)):
 class ScanSettings(BaseModel):
     start_hour: int = 11
     end_hour: int = 23
-    interval_minutes: int = 5
+    interval_seconds: int = 30   # replaces interval_minutes; WebSocket ignores this, REST fallback uses it
 
 
 @router.post("/settings")
 def update_scan_settings(body: ScanSettings):
-    """Update the live scan schedule dynamically."""
-    from app.core.scheduler import scheduler
-    from app.core.live_scanner import run_scan
-    from apscheduler.triggers.cron import CronTrigger
-    import asyncio
+    """Update scan interval for the REST fallback loop."""
+    from app.core.realtime_scanner import set_poll_interval
 
-    # Remove existing scan job and re-add with new settings
-    try:
-        scheduler.remove_job("live_scan")
-    except Exception:
-        pass
+    seconds = max(5, body.interval_seconds)
+    set_poll_interval(seconds)
 
-    def sync_run_scan():
-        asyncio.create_task(run_scan())
+    if seconds < 60:
+        interval_label = f"{seconds}s"
+    else:
+        interval_label = f"{seconds // 60}min"
 
-    hour_range = f"{body.start_hour}-{body.end_hour - 1}"
-    scheduler.add_job(
-        sync_run_scan,
-        CronTrigger(
-            hour=hour_range,
-            minute=f"*/{body.interval_minutes}",
-            timezone="Asia/Jerusalem"
-        ),
-        id="live_scan",
-        name="Live penny stock scanner",
-        replace_existing=True,
-    )
     return {
         "ok": True,
         "start_hour": body.start_hour,
         "end_hour": body.end_hour,
-        "interval_minutes": body.interval_minutes,
-        "message": f"Scanner set: {body.start_hour}:00-{body.end_hour}:00, every {body.interval_minutes}min",
+        "interval_seconds": seconds,
+        "ws_mode": True,
+        "message": (
+            f"Scanner set: {body.start_hour}:00-{body.end_hour}:00 | "
+            f"WebSocket (real-time) + REST fallback every {interval_label}"
+        ),
+    }
+
+
+@router.get("/scanner-status")
+def get_scanner_status():
+    """Return whether WebSocket is connected and current poll interval."""
+    from app.core.realtime_scanner import ws_connected, _poll_interval_seconds, _watchlist
+    return {
+        "ws_connected": ws_connected,
+        "poll_interval_seconds": _poll_interval_seconds,
+        "watchlist_size": len(_watchlist),
+        "mode": "realtime" if ws_connected else "polling",
     }
