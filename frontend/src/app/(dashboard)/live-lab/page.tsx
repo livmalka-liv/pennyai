@@ -666,9 +666,6 @@ export default function LiveLabPage() {
         </aside>
 
       </div>
-    </div>
-  );
-}
 
       {/* ── Settings Modal ── */}
       {showSettings && (
@@ -696,7 +693,7 @@ export default function LiveLabPage() {
                     <label className="text-[10px] text-[#64748B] block mb-1">התחלה</label>
                     <select
                       value={pendingSettings.startHour}
-                      onChange={e => setPendingSettings(p => ({ ...p, startHour: e.target.value }))}
+                      onChange={e => setPendingSettings((p: typeof scanSettings) => ({ ...p, startHour: e.target.value }))}
                       className="w-full rounded-lg border border-[#1E293B] bg-[#0B0E14] px-3 py-2 text-sm text-[#F8FAFC] focus:border-[#6366F1]/50 focus:outline-none"
                     >
                       {Array.from({ length: 13 }, (_, i) => i + 9).map(h => (
@@ -708,7 +705,7 @@ export default function LiveLabPage() {
                     <label className="text-[10px] text-[#64748B] block mb-1">סיום</label>
                     <select
                       value={pendingSettings.endHour}
-                      onChange={e => setPendingSettings(p => ({ ...p, endHour: e.target.value }))}
+                      onChange={e => setPendingSettings((p: typeof scanSettings) => ({ ...p, endHour: e.target.value }))}
                       className="w-full rounded-lg border border-[#1E293B] bg-[#0B0E14] px-3 py-2 text-sm text-[#F8FAFC] focus:border-[#6366F1]/50 focus:outline-none"
                     >
                       {Array.from({ length: 16 }, (_, i) => i + 10).map(h => (
@@ -753,7 +750,7 @@ export default function LiveLabPage() {
                   {["1", "5", "10", "15"].map(m => (
                     <button
                       key={m}
-                      onClick={() => setPendingSettings(p => ({ ...p, intervalMin: m }))}
+                      onClick={() => setPendingSettings((p: typeof scanSettings) => ({ ...p, intervalMin: m }))}
                       className={cn(
                         "rounded-lg border py-2 text-sm font-semibold transition-all",
                         pendingSettings.intervalMin === m
