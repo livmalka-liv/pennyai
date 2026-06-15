@@ -1,4 +1,5 @@
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,10 +18,21 @@ from app.core.scheduler import start_scheduler
 settings = get_settings()
 
 
+async def _prewarm_backtest_cache() -> None:
+    """Pre-generate mock catalyst data in the background so first user request is instant."""
+    try:
+        from app.data.mock_provider import generate_catalyst_days
+        for years in [1, 3, 5, 10, 15, 20]:
+            await asyncio.to_thread(generate_catalyst_days, years)
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     start_scheduler()
+    asyncio.create_task(_prewarm_backtest_cache())
     yield
 
 
