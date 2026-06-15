@@ -93,7 +93,7 @@ export default function ChatPanel({
 
     try {
       const resp = await fetch(
-        (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1") + "/backtest/parse",
+        (process.env.NEXT_PUBLIC_API_URL || "https://pennyai-backend-production.up.railway.app/api/v1").replace(/\/$/, "") + "/backtest/parse",
         { method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: userInput, language: "he" }) }
       );

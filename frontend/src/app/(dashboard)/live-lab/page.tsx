@@ -1,6 +1,6 @@
 "use client";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+const API = (process.env.NEXT_PUBLIC_API_URL || "https://pennyai-backend-production.up.railway.app/api/v1").replace(/\/$/, "");
 
 import { useState, useEffect, useCallback } from "react";
 import {
