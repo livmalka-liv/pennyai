@@ -335,8 +335,8 @@ def _simulate_exit(
 ) -> tuple[int, float, str]:
     exit_rules = [r for r in strategy.rules if r.type == RuleType.EXIT]
 
-    tp_pct = 15.0
-    sl_pct = -5.0
+    tp_pct = 20.0
+    sl_pct = -7.0
 
     for rule in exit_rules:
         pct = rule.parameters.get("pct", 0)

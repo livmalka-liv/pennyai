@@ -160,7 +160,20 @@ export default function ChatPanel({
 
     try {
       const { runBacktest } = await import("@/lib/api");
-      const result = await runBacktest(strategy);
+
+      // Retry up to 3 times — server may be restarting after a deploy
+      let result;
+      let lastErr: unknown;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          result = await runBacktest(strategy);
+          break;
+        } catch (e) {
+          lastErr = e;
+          if (attempt < 2) await new Promise(r => setTimeout(r, 3000));
+        }
+      }
+      if (!result) throw lastErr;
 
       const finalEquity = startingCapital * (1 + result.metrics.totalRoi / 100);
       const doneMsg: Message = {
