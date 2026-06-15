@@ -100,6 +100,42 @@ class BrokerOrder(Base):
     error_msg       = Column(Text)
 
 
+class BacktestRun(Base):
+    """Every backtest run — saved automatically for tracking."""
+    __tablename__ = "backtest_runs"
+
+    id             = Column(String, primary_key=True)
+    user_id        = Column(String, index=True, nullable=True)
+    strategy_name  = Column(String, nullable=False, index=True)
+    lookback_years = Column(Integer, nullable=False)
+    total_trades   = Column(Integer, default=0)
+    win_rate       = Column(Float, default=0)
+    total_roi      = Column(Float, default=0)
+    profit_factor  = Column(Float, default=0)
+    max_drawdown   = Column(Float, default=0)
+    sharpe_ratio   = Column(Float, default=0)
+    created_at     = Column(DateTime, default=datetime.utcnow)
+
+
+class BacktestTrade(Base):
+    """Individual trades from every backtest run — powers daily reports."""
+    __tablename__ = "backtest_trades"
+
+    id             = Column(String, primary_key=True)
+    run_id         = Column(String, ForeignKey("backtest_runs.id"), index=True)
+    strategy_name  = Column(String, nullable=False, index=True)
+    ticker         = Column(String, nullable=False, index=True)
+    trade_date     = Column(String, nullable=False, index=True)   # YYYY-MM-DD
+    entry_price    = Column(Float)
+    exit_price     = Column(Float)
+    return_pct     = Column(Float)
+    exit_reason    = Column(String)
+    rvol           = Column(Float)
+    catalyst_type  = Column(String)
+    holding_minutes = Column(Integer)
+    created_at     = Column(DateTime, default=datetime.utcnow)
+
+
 class OptimizationResult(Base):
     """AI-suggested parameter improvements found during forward testing."""
     __tablename__ = "optimization_results"
