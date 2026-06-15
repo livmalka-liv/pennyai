@@ -9,6 +9,7 @@ from app.api.routes.live_lab import router as live_lab_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.stripe_routes import router as stripe_router
 from app.api.routes.brokers import router as brokers_router
+from app.api.routes.chat import router as chat_router
 from app.core.config import get_settings
 from app.data.database import init_db
 from app.core.scheduler import start_scheduler
@@ -49,6 +50,7 @@ app.include_router(live_lab_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(stripe_router, prefix="/api/v1")
 app.include_router(brokers_router, prefix="/api/v1")
+app.include_router(chat_router, prefix="/api/v1")
 
 
 @app.get("/health")

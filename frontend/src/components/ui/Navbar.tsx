@@ -16,6 +16,7 @@ const navLinks = [
   { href: "/brokers",  label: "Brokers 🔌" },
   { href: "/vault",    label: "Vault" },
   { href: "/academy",  label: "Academy" },
+  { href: "/chat",     label: "💬 Chat AI" },
 ];
 
 const TIER_LABEL: Record<string, { label: string; color: string; bg: string }> = {
