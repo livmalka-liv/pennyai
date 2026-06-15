@@ -357,8 +357,8 @@ def _simulate_exit(
         if row["low"] <= sl_price:
             return i, sl_price, "stop_loss"
 
-        # Force exit at market close (minute 389 = 3:59 PM)
-        if i >= 388:
+        # Force exit at session end (minute 239 = 1:29 PM — end of our candle window)
+        if i >= 238:
             return i, row["close"], "eod_close"
 
     return len(df) - 1, df.iloc[-1]["close"], "eod_close"

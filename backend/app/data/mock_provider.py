@@ -12,6 +12,8 @@ from datetime import date, timedelta, datetime
 
 from app.data.types import CandleData, CatalystDay
 
+# Module-level cache — mock data is deterministic (seed=42), so we generate once per lookback_years
+_MOCK_CACHE: dict[int, list] = {}
 
 PENNY_TICKERS = [
     "TNXP", "MULN", "SNDL", "MVIS", "WKHS", "FFIE", "NKLA", "IDEX",
@@ -26,6 +28,9 @@ def generate_catalyst_days(
     max_float_m: float = 50.0,
 ) -> list[CatalystDay]:
     """Generate realistic synthetic catalyst days for backtesting."""
+    if lookback_years in _MOCK_CACHE:
+        return _MOCK_CACHE[lookback_years]
+
     random.seed(42)
     days: list[CatalystDay] = []
     end = date.today()
@@ -70,6 +75,7 @@ def generate_catalyst_days(
 
         current += timedelta(days=1)
 
+    _MOCK_CACHE[lookback_years] = days
     return days
 
 
@@ -80,16 +86,15 @@ def _generate_1m_candles(
     gap_pct: float,
     rvol: float,
 ) -> list[CandleData]:
-    """Generate 390 one-minute candles with realistic penny stock intraday behavior."""
+    """Generate 240 one-minute candles (9:30–1:30 PM) — covers the key penny stock session."""
     candles = []
     price = open_price
     cumulative_volume = 0
     cumulative_pv = 0.0  # price × volume for VWAP
 
-    # Morning spike pattern: aggressive first 30 min, then pulback, then continuation
     market_open = datetime(date.year, date.month, date.day, 9, 30)
 
-    for minute in range(390):
+    for minute in range(240):
         ts = market_open + timedelta(minutes=minute)
         hour_in_session = minute / 60.0
 
@@ -149,7 +154,5 @@ def _get_trend_factor(minute: int, gap_pct: float) -> float:
         if random.random() < 0.70:
             return 0.004 * strength  # Strong second leg, often breaks above morning HOD
         return random.uniform(-0.001, 0.001)
-    elif minute < 300:      # Midday fade
+    else:                   # Midday fade/consolidation
         return random.uniform(-0.001, 0.0005)
-    else:                   # Power hour
-        return 0.002 * strength * random.choice([1, -1])

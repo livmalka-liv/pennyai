@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from app.models.schemas import (
     ParseStrategyRequest,
@@ -45,7 +46,7 @@ async def run_backtest_endpoint(request: RunBacktestRequest):
     return job ID, poll /backtest/status/{id} for result.
     """
     try:
-        result = run_backtest(request.strategy)
+        result = await asyncio.to_thread(run_backtest, request.strategy)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
