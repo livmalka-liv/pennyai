@@ -9,11 +9,12 @@ import { useState, useRef, useEffect } from "react";
 import UpgradeModal from "@/components/ui/UpgradeModal";
 
 const navLinks = [
+  { href: "/dashboard", label: "🏠 בית" },
   { href: "/sandbox",  label: "Sandbox" },
-  { href: "/library",  label: "Strategy Library" },
+  { href: "/library",  label: "Library" },
   { href: "/live-lab", label: "Live Lab 🔴" },
   { href: "/brokers",  label: "Brokers 🔌" },
-  { href: "/vault",    label: "Strategy Vault" },
+  { href: "/vault",    label: "Vault" },
   { href: "/academy",  label: "Academy" },
 ];
 
@@ -110,7 +111,7 @@ export default function Navbar() {
     <header className="sticky top-0 z-50 border-b border-[#1E293B] bg-[#0B0E14]/80 backdrop-blur-xl">
       <div className="mx-auto flex h-14 max-w-screen-2xl items-center justify-between px-6">
         {/* Logo */}
-        <Link href="/sandbox" className="flex items-center gap-2 group shrink-0">
+        <Link href="/dashboard" className="flex items-center gap-2 group shrink-0">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-[#6366F1] to-[#8B5CF6]">
             <TrendingUp className="h-4 w-4 text-white" strokeWidth={2.5} />
           </div>
