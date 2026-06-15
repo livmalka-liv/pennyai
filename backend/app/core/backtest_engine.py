@@ -282,47 +282,47 @@ def _detect_entry_signal(df: pd.DataFrame, strategy: StrategyConfig) -> tuple[in
 
     entry_rule = entry_rules[0]
     cond = entry_rule.condition.lower()
+    close = df["close"].values
+    high = df["high"].values
 
-    # Skip first 10 minutes (too chaotic at open — let the pattern form)
-    for i in range(10, len(df)):
-        row = df.iloc[i]
-
-        if "vwap" in cond:
-            if "reclaim" in cond or "hold" in cond:
-                # Price was below VWAP at some point in last 15 bars, now reclaims
-                lookback = df["above_vwap"].iloc[max(0, i - 15):i]
-                was_below = not lookback.all()  # at least one bar below VWAP recently
-                if was_below and row["above_vwap"] and i >= 20:
-                    return i, row["close"]
-            else:
-                if row["vwap_cross_up"] and i >= 20:
-                    return i, row["close"]
-
-        elif "hod" in cond or "high of day" in cond:
-            # Enter on HOD break AFTER consolidation — no new HOD in the last 20 bars
-            # This filters out the explosive open and waits for a bull-flag-style breakout
-            if row["break_hod"] and i >= 30:
-                recent_breaks = df["break_hod"].iloc[max(0, i - 20):i]
-                if not recent_breaks.any():  # Consolidation confirmed
-                    return i, row["close"]  # Enter at close, not the high of the candle
-
-        elif "rsi" in cond:
-            level = entry_rule.parameters.get("level", 30)
-            if row["rsi"] < level:
-                return i, row["close"]
-
-        elif "halt" in cond:
-            # Simulate halt resume: look for volume spike
-            if i > 10 and row["volume"] > df["volume"].iloc[:i].mean() * 5:
-                return i, row["open"]
-
+    if "vwap" in cond:
+        above_vwap = df["above_vwap"].values
+        vwap_cross = df["vwap_cross_up"].values
+        if "reclaim" in cond or "hold" in cond:
+            for i in range(20, len(df)):
+                if above_vwap[i] and not above_vwap[max(0, i - 15):i].all():
+                    return i, close[i]
         else:
-            # Generic momentum: price closes above 5-bar high after a brief pullback
-            if i >= 10:
-                five_bar_high = df["high"].iloc[i - 5:i].max()
-                recent_low = df["low"].iloc[i - 5:i].min() < df["close"].iloc[i - 10]
-                if row["close"] > five_bar_high and recent_low:
-                    return i, row["close"]
+            hits = np.where(vwap_cross[20:])[0]
+            if len(hits) > 0:
+                i = int(hits[0]) + 20
+                return i, close[i]
+
+    elif "hod" in cond or "high of day" in cond:
+        break_hod = df["break_hod"].values
+        for i in range(30, len(df)):
+            if break_hod[i] and not break_hod[max(0, i - 20):i].any():
+                return i, close[i]
+
+    elif "rsi" in cond:
+        level = entry_rule.parameters.get("level", 30)
+        rsi = df["rsi"].values
+        hits = np.where(rsi[10:] < level)[0]
+        if len(hits) > 0:
+            i = int(hits[0]) + 10
+            return i, close[i]
+
+    elif "halt" in cond:
+        vol = df["volume"].values
+        for i in range(10, len(df)):
+            if vol[i] > vol[:i].mean() * 5:
+                return i, df["open"].values[i]
+
+    else:
+        for i in range(10, len(df)):
+            five_bar_high = high[max(0, i - 5):i].max() if i >= 5 else 0
+            if close[i] > five_bar_high:
+                return i, close[i]
 
     return None
 
@@ -348,20 +348,23 @@ def _simulate_exit(
     tp_price = entry_price * (1 + tp_pct / 100)
     sl_price = entry_price * (1 + sl_pct / 100)
 
-    for i in range(entry_minute + 1, len(df)):
-        row = df.iloc[i]
+    start = entry_minute + 1
+    end = min(239, len(df) - 1)
+    highs = df["high"].values[start:end]
+    lows = df["low"].values[start:end]
+    closes = df["close"].values
 
-        if row["high"] >= tp_price:
-            return i, tp_price, "take_profit"
+    tp_hits = np.where(highs >= tp_price)[0]
+    sl_hits = np.where(lows <= sl_price)[0]
 
-        if row["low"] <= sl_price:
-            return i, sl_price, "stop_loss"
+    tp_idx = int(tp_hits[0]) + start if len(tp_hits) > 0 else end
+    sl_idx = int(sl_hits[0]) + start if len(sl_hits) > 0 else end
 
-        # Force exit at session end (minute 239 = 1:29 PM — end of our candle window)
-        if i >= 238:
-            return i, row["close"], "eod_close"
-
-    return len(df) - 1, df.iloc[-1]["close"], "eod_close"
+    if tp_idx < sl_idx and tp_idx < end:
+        return tp_idx, tp_price, "take_profit"
+    if sl_idx < tp_idx and sl_idx < end:
+        return sl_idx, sl_price, "stop_loss"
+    return end, closes[end], "eod_close"
 
 
 def _calculate_slippage(price: float, user_slippage_pct: float) -> float:

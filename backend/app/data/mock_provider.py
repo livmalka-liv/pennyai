@@ -43,8 +43,11 @@ def generate_catalyst_days(
             current += timedelta(days=1)
             continue
 
-        # ~15 catalyst days per month across the penny universe
-        num_catalysts = random.randint(0, 3)
+        # ~2-3 catalyst events per week (realistic for a quality scanner)
+        if random.random() > 0.25:
+            current += timedelta(days=1)
+            continue
+        num_catalysts = 1
         for _ in range(num_catalysts):
             ticker = random.choice(PENNY_TICKERS)
             float_shares = int(random.uniform(1_000_000, max_float_m * 1_000_000))
