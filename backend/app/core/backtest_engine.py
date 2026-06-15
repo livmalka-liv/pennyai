@@ -182,8 +182,8 @@ def run_backtest(strategy: StrategyConfig) -> BacktestResult:
         )
         trades.append(trade)
 
-        # Update equity: fixed position size (no compounding) — realistic for penny stocks
-        equity = equity + POSITION_DOLLARS * (return_pct / 100)
+        # Update equity using actual position size (prevents negative equity)
+        equity = max(0.0, equity + eff_position * (return_pct / 100))
 
         if last_date != day.date:
             equity_curve.append(EquityPoint(date=str(day.date), equity=round(equity, 2)))

@@ -7,7 +7,6 @@ Cache results in PostgreSQL to avoid re-fetching.
 """
 
 import random
-import math
 from datetime import date, timedelta, datetime
 
 from app.data.types import CandleData, CatalystDay
@@ -43,11 +42,8 @@ def generate_catalyst_days(
             current += timedelta(days=1)
             continue
 
-        # ~2-3 catalyst events per week (realistic for a quality scanner)
-        if random.random() > 0.25:
-            current += timedelta(days=1)
-            continue
-        num_catalysts = 1
+        # ~1 catalyst event per trading day on average
+        num_catalysts = random.randint(0, 2)
         for _ in range(num_catalysts):
             ticker = random.choice(PENNY_TICKERS)
             float_shares = int(random.uniform(1_000_000, max_float_m * 1_000_000))
