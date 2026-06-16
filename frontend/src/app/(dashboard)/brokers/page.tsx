@@ -26,7 +26,7 @@ async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
 
 interface BrokerConn {
   id: string;
-  broker_type: "ibkr" | "colmex";
+  broker_type: "ibkr" | "colmex" | "alpaca";
   label: string;
   account_id: string | null;
   status: "connected" | "disconnected" | "error";
@@ -87,6 +87,17 @@ const BROKER_META = {
       { key: "api_key",    label: "API Key",    placeholder: "colmex_key_...", type: "text" },
       { key: "api_secret", label: "API Secret", placeholder: "••••••••",       type: "password" },
       { key: "account_id", label: "Account ID", placeholder: "CM123456",       type: "text" },
+    ],
+  },
+  alpaca: {
+    name: "Alpaca Markets",
+    logo: "🦙",
+    color: "from-[#FACC15] to-[#F59E0B]",
+    description: "REST API — נייר ואמיתי, אמריקאי בלבד",
+    fields: [
+      { key: "api_key",    label: "API Key",    placeholder: "PKXXXXXXXXXXXXXXXX", type: "text" },
+      { key: "secret_key", label: "Secret Key", placeholder: "••••••••",           type: "password" },
+      { key: "paper",      label: "Paper trading?", placeholder: "true",           type: "text" },
     ],
   },
 } as const;

@@ -12,6 +12,8 @@ from app.api.routes.stripe_routes import router as stripe_router
 from app.api.routes.brokers import router as brokers_router
 from app.api.routes.chat import router as chat_router
 from app.api.routes.tracker import router as tracker_router
+from app.api.routes.live_strategies import router as live_strategies_router
+from app.api.routes.performance import router as performance_router
 from app.core.config import get_settings
 from app.data.database import init_db
 from app.core.scheduler import start_scheduler
@@ -76,6 +78,8 @@ app.include_router(stripe_router, prefix="/api/v1")
 app.include_router(brokers_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(tracker_router, prefix="/api/v1")
+app.include_router(live_strategies_router, prefix="/api/v1")
+app.include_router(performance_router, prefix="/api/v1")
 
 
 @app.get("/health")

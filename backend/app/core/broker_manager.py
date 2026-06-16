@@ -5,6 +5,7 @@ import json
 from cryptography.fernet import Fernet
 
 from app.core.brokers import BrokerBase, IBKRBroker, ColmexBroker
+from app.core.brokers.alpaca import AlpacaBroker
 
 _RAW_KEY = os.getenv("ENCRYPTION_KEY", "")
 if _RAW_KEY:
@@ -29,5 +30,7 @@ def get_broker(broker_type: str, credentials_enc: str) -> BrokerBase:
             return IBKRBroker(creds)
         case "colmex":
             return ColmexBroker(creds)
+        case "alpaca":
+            return AlpacaBroker(creds)
         case _:
             raise ValueError(f"Unknown broker type: {broker_type}")

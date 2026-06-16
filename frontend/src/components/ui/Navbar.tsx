@@ -17,7 +17,8 @@ const navLinks = [
   { href: "/vault",    label: "Vault" },
   { href: "/academy",  label: "Academy" },
   { href: "/chat",     label: "💬 Chat AI" },
-  { href: "/tracker",  label: "📊 Tracker" },
+  { href: "/tracker",     label: "📊 Tracker" },
+  { href: "/performance", label: "📈 Performance" },
 ];
 
 const TIER_LABEL: Record<string, { label: string; color: string; bg: string }> = {
