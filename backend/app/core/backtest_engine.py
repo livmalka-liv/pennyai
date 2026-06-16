@@ -24,6 +24,7 @@ from app.models.schemas import (
     TradeResult,
     EquityPoint,
     DurabilityPeriod,
+    BurnAnalysis,
     RuleType,
 )
 from app.core.config import get_settings
@@ -191,6 +192,7 @@ def run_backtest(strategy: StrategyConfig) -> BacktestResult:
 
     metrics = _calculate_metrics(trades, STARTING_CAPITAL, equity, strategy.lookback_years)
     durability = _calculate_durability(trades)
+    burn = _calculate_burn_analysis(trades, equity_curve, STARTING_CAPITAL)
 
     return BacktestResult(
         id=str(uuid.uuid4()),
@@ -200,6 +202,7 @@ def run_backtest(strategy: StrategyConfig) -> BacktestResult:
         equity_curve=equity_curve,
         trades=trades,
         durability_by_year=durability,
+        burn_analysis=burn,
         created_at=datetime.utcnow().isoformat(),
     )
 
@@ -498,3 +501,125 @@ def _calculate_durability(trades: list[TradeResult]) -> list[DurabilityPeriod]:
             sharpe=round(sharpe, 2),
         ))
     return result
+
+
+def _calculate_burn_analysis(
+    trades: list[TradeResult],
+    equity_curve: list[EquityPoint],
+    starting_capital: float,
+) -> BurnAnalysis | None:
+    if len(equity_curve) < 2 or not trades:
+        return None
+
+    dates = [ep.date for ep in equity_curve]
+    equities = [ep.equity for ep in equity_curve]
+
+    # ── Max drawdown with dates ──────────────────────────────────────────────
+    peak = equities[0]
+    peak_idx = 0
+    max_dd = 0.0
+    dd_start = dates[0]
+    dd_end = dates[0]
+    cur_dd_start_idx = 0
+
+    for i, eq in enumerate(equities):
+        if eq >= peak:
+            peak = eq
+            peak_idx = i
+            cur_dd_start_idx = i
+        else:
+            dd_pct = (peak - eq) / peak * 100
+            if dd_pct > max_dd:
+                max_dd = dd_pct
+                dd_start = dates[cur_dd_start_idx]
+                dd_end = dates[i]
+
+    try:
+        from datetime import date as ddate
+        dd_duration = (ddate.fromisoformat(dd_end) - ddate.fromisoformat(dd_start)).days
+    except Exception:
+        dd_duration = 0
+
+    # ── Ruin (equity → 0) ────────────────────────────────────────────────────
+    ruin_occurred = equities[-1] <= 0
+    ruin_date = None
+    months_to_ruin = None
+    if ruin_occurred:
+        for ep in equity_curve:
+            if ep.equity <= 0:
+                ruin_date = ep.date
+                try:
+                    from datetime import date as ddate
+                    start_d = ddate.fromisoformat(dates[0])
+                    ruin_d = ddate.fromisoformat(ruin_date)
+                    months_to_ruin = round((ruin_d - start_d).days / 30.44, 1)
+                except Exception:
+                    pass
+                break
+
+    # ── Worst consecutive losing streak ──────────────────────────────────────
+    max_streak = 0
+    cur_streak = 0
+    streak_loss = 0.0
+    cur_loss = 0.0
+    streak_start_i = 0
+    best_streak_start = None
+    best_streak_end = None
+
+    for i, t in enumerate(trades):
+        if t.return_pct < 0:
+            if cur_streak == 0:
+                streak_start_i = i
+            cur_streak += 1
+            cur_loss += t.return_pct
+            if cur_streak > max_streak:
+                max_streak = cur_streak
+                streak_loss = cur_loss
+                best_streak_start = trades[streak_start_i].date
+                best_streak_end = t.date
+        else:
+            cur_streak = 0
+            cur_loss = 0.0
+
+    # ── Longest flat period (no new equity high) ──────────────────────────────
+    peak_eq = equities[0]
+    flat_start_idx = 0
+    longest_flat = 0
+    for i, eq in enumerate(equities):
+        if eq > peak_eq:
+            try:
+                from datetime import date as ddate
+                flat_days = (ddate.fromisoformat(dates[i]) - ddate.fromisoformat(dates[flat_start_idx])).days
+                longest_flat = max(longest_flat, flat_days)
+            except Exception:
+                pass
+            peak_eq = eq
+            flat_start_idx = i
+
+    # ── Verdict ──────────────────────────────────────────────────────────────
+    if ruin_occurred and months_to_ruin is not None:
+        verdict = f"שרפת את התיק אחרי {months_to_ruin:.1f} חודשים ({ruin_date})"
+    elif max_dd >= 80:
+        verdict = f"כמעט שרפת — ירידה של {max_dd:.1f}% תוך {dd_duration} ימים ({dd_start} עד {dd_end})"
+    elif max_dd >= 50:
+        verdict = f"ירידה קשה של {max_dd:.1f}% תוך {dd_duration} ימים — היית מפסיק לסחור?"
+    elif max_dd >= 25:
+        verdict = f"ירידה בינונית של {max_dd:.1f}% ({dd_start} עד {dd_end})"
+    else:
+        verdict = f"drawdown מקסימלי {max_dd:.1f}% — יחסית נשלט"
+
+    return BurnAnalysis(
+        max_drawdown_pct=round(max_dd, 1),
+        drawdown_start=dd_start,
+        drawdown_end=dd_end,
+        drawdown_duration_days=dd_duration,
+        ruin_occurred=ruin_occurred,
+        ruin_date=ruin_date,
+        months_to_ruin=months_to_ruin,
+        max_consecutive_losses=max_streak,
+        worst_streak_return_pct=round(streak_loss, 2),
+        worst_streak_start=best_streak_start,
+        worst_streak_end=best_streak_end,
+        longest_flat_days=longest_flat,
+        verdict=verdict,
+    )

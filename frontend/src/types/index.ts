@@ -70,6 +70,22 @@ export interface DurabilityPeriod {
   sharpe: number;
 }
 
+export interface BurnAnalysis {
+  max_drawdown_pct: number;
+  drawdown_start: string;
+  drawdown_end: string;
+  drawdown_duration_days: number;
+  ruin_occurred: boolean;
+  ruin_date?: string;
+  months_to_ruin?: number;
+  max_consecutive_losses: number;
+  worst_streak_return_pct: number;
+  worst_streak_start?: string;
+  worst_streak_end?: string;
+  longest_flat_days: number;
+  verdict: string;
+}
+
 export interface BacktestResult {
   id: string;
   status: "pending" | "running" | "completed" | "failed";
@@ -78,6 +94,7 @@ export interface BacktestResult {
   equityCurve: { date: string; equity: number }[];
   trades: Trade[];
   durabilityByYear: DurabilityPeriod[];
+  burn_analysis?: BurnAnalysis;
   createdAt: string;
 }
 

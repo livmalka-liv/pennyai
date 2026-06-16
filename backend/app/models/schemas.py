@@ -105,6 +105,27 @@ class DurabilityPeriod(BaseModel):
     sharpe: float
 
 
+class BurnAnalysis(BaseModel):
+    # Worst drawdown period
+    max_drawdown_pct: float
+    drawdown_start: str
+    drawdown_end: str
+    drawdown_duration_days: int
+    # Ruin scenario
+    ruin_occurred: bool
+    ruin_date: Optional[str] = None
+    months_to_ruin: Optional[float] = None
+    # Worst losing streak
+    max_consecutive_losses: int
+    worst_streak_return_pct: float
+    worst_streak_start: Optional[str] = None
+    worst_streak_end: Optional[str] = None
+    # Recovery hardship
+    longest_flat_days: int           # Longest days without new equity high
+    # Plain-language verdict
+    verdict: str
+
+
 class BacktestResult(BaseModel):
     id: str
     status: Literal["pending", "running", "completed", "failed"]
@@ -113,6 +134,7 @@ class BacktestResult(BaseModel):
     equity_curve: list[EquityPoint]
     trades: list[TradeResult]
     durability_by_year: list[DurabilityPeriod] = Field(default_factory=list)
+    burn_analysis: Optional[BurnAnalysis] = None
     created_at: str
 
 

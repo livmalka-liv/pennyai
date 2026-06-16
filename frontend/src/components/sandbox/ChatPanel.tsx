@@ -176,10 +176,22 @@ export default function ChatPanel({
       if (!result) throw lastErr;
 
       const finalEquity = startingCapital * (1 + result.metrics.totalRoi / 100);
+      const burn = result.burn_analysis;
+      const burnLines = burn ? [
+        `\n\n---\n🔥 **ניתוח שריפת תיק:**`,
+        `**${burn.verdict}**`,
+        `📉 Drawdown מקסימלי: **${burn.max_drawdown_pct}%** (${burn.drawdown_start} → ${burn.drawdown_end}, ${burn.drawdown_duration_days} ימים)`,
+        burn.max_consecutive_losses > 0
+          ? `⛔ רצף הפסדים מקסימלי: **${burn.max_consecutive_losses} עסקאות רצופות** (${burn.worst_streak_return_pct.toFixed(1)}%)`
+          : null,
+        burn.longest_flat_days > 0
+          ? `⏳ הכי הרבה זמן ללא שיא חדש: **${burn.longest_flat_days} ימים**`
+          : null,
+      ].filter(Boolean).join("\n") : "";
       const doneMsg: Message = {
         id: crypto.randomUUID(),
         role: "assistant",
-        content: `✅ הבדיקה הושלמה!\n\n**תשואה כוללת:** ${result.metrics.totalRoi >= 0 ? "+" : ""}${result.metrics.totalRoi.toFixed(1)}% על פני ${lookbackYears} שנים\n**אחוז הצלחה:** ${result.metrics.winRate.toFixed(1)}%\n**סה"כ עסקאות:** ${result.metrics.totalTrades}\n**הון סופי:** $${finalEquity.toLocaleString("en-US", { maximumFractionDigits: 0 })} (מתוך $${startingCapital.toLocaleString()})`,
+        content: `✅ הבדיקה הושלמה!\n\n**תשואה כוללת:** ${result.metrics.totalRoi >= 0 ? "+" : ""}${result.metrics.totalRoi.toFixed(1)}% על פני ${lookbackYears} שנים\n**אחוז הצלחה:** ${result.metrics.winRate.toFixed(1)}%\n**סה"כ עסקאות:** ${result.metrics.totalTrades}\n**הון סופי:** $${finalEquity.toLocaleString("en-US", { maximumFractionDigits: 0 })} (מתוך $${startingCapital.toLocaleString()})${burnLines}`,
       };
       setMessages(prev => prev.filter(m => m.id !== "running").concat(doneMsg));
       onBacktestResult(result);
