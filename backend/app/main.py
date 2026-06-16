@@ -29,9 +29,20 @@ async def _prewarm_backtest_cache() -> None:
         pass
 
 
+async def _init_db_with_retry(max_attempts: int = 10, delay: float = 3.0) -> None:
+    for attempt in range(1, max_attempts + 1):
+        try:
+            await asyncio.to_thread(init_db)
+            return
+        except Exception as exc:
+            if attempt == max_attempts:
+                raise
+            await asyncio.sleep(delay)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    await _init_db_with_retry()
     start_scheduler()
     asyncio.create_task(_prewarm_backtest_cache())
     yield
