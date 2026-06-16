@@ -343,6 +343,112 @@ def get_catalyst_days(lookback_years: int, api_key: str) -> list[CatalystDay]:
     return cached
 
 
+def get_todays_movers(api_key: str,
+                      min_change_pct: float = 10.0,
+                      min_volume: int = 500_000,
+                      min_price: float = 0.5,
+                      max_price: float = 10.0) -> list[CatalystDay]:
+    """
+    Fetch today's top penny-stock movers from Polygon's snapshot gainers endpoint.
+    Returns CatalystDay objects for the current trading day with intraday 1-min candles.
+    """
+    today = date.today()
+
+    try:
+        snapshot = _polygon_get(
+            "/v2/snapshot/locale/us/markets/stocks/gainers",
+            {"include_otc": "false"},
+            api_key,
+            retries=2,
+        )
+    except Exception as exc:
+        logger.error(f"get_todays_movers: snapshot fetch failed: {exc}")
+        return []
+
+    tickers_data = snapshot.get("tickers", [])
+    if not tickers_data:
+        logger.warning("get_todays_movers: no gainers returned from Polygon snapshot")
+        return []
+
+    candidates = []
+    for t in tickers_data:
+        day = t.get("day", {})
+        ticker = t.get("ticker", "")
+        price = day.get("o", 0) or t.get("lastTrade", {}).get("p", 0)
+        volume = int(day.get("v", 0))
+        change_pct = t.get("todaysChangePerc", 0)
+
+        if not ticker or any(ch in ticker for ch in ["+", ".", "W", "U", "R"]):
+            continue
+        if not (min_price <= price <= max_price):
+            continue
+        if volume < min_volume:
+            continue
+        if change_pct < min_change_pct:
+            continue
+
+        candidates.append({
+            "ticker": ticker,
+            "open": price,
+            "change_pct": change_pct,
+            "volume": volume,
+            "prev_close": t.get("prevDay", {}).get("c", price),
+        })
+
+    logger.info(f"get_todays_movers: {len(candidates)} penny-stock gainers for {today}")
+
+    result: list[CatalystDay] = []
+    for stock in candidates[:20]:  # cap at 20 to avoid rate limits
+        ticker = stock["ticker"]
+        try:
+            raw_candles = _fetch_1min_candles(ticker, today, api_key)
+            if not raw_candles:
+                continue
+
+            candles = []
+            cum_vol = 0
+            cum_pv = 0.0
+            for bar in raw_candles:
+                ts = datetime.fromtimestamp(bar.get("t", 0) / 1000)
+                o_ = bar["o"]; h_ = bar["h"]; l_ = bar["l"]; c_ = bar["c"]
+                v_ = int(bar.get("v", 0))
+                cum_vol += v_
+                cum_pv += ((h_ + l_ + c_) / 3) * v_
+                vwap = cum_pv / cum_vol if cum_vol > 0 else c_
+                candles.append(CandleData(
+                    ticker=ticker, timestamp=ts,
+                    open=o_, high=h_, low=l_, close=c_,
+                    volume=v_, vwap=round(vwap, 4),
+                ))
+
+            if not candles:
+                continue
+
+            avg_vol = _fetch_avg_volume(ticker, today, api_key)
+            rvol = round(stock["volume"] / avg_vol, 1) if avg_vol > 0 else 1.0
+            float_shares = get_historical_float(ticker, today)
+            gap_pct = ((stock["open"] - stock["prev_close"]) / stock["prev_close"] * 100
+                       if stock["prev_close"] > 0 else stock["change_pct"])
+
+            day_obj = CatalystDay(
+                ticker=ticker, date=today,
+                open_price=stock["open"], pre_market_gap_pct=round(gap_pct, 2),
+                day_volume=stock["volume"], float_shares=float_shares,
+                rvol=rvol, catalyst_type="live",
+                candles_1m=candles,
+            )
+            result.append(day_obj)
+            logger.info(f"  ✓ {ticker}: +{stock['change_pct']:.1f}%, rvol {rvol}x")
+            time.sleep(0.2)
+
+        except Exception as exc:
+            logger.warning(f"  ✗ {ticker}: {exc}")
+            continue
+
+    logger.info(f"get_todays_movers: returning {len(result)} movers with candles")
+    return result
+
+
 def backfill_catalyst_types(api_key: str) -> int:
     from app.models.db_models import PolygonCatalystDay
     db = _session()

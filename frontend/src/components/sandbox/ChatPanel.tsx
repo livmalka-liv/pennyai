@@ -199,7 +199,15 @@ export default function ChatPanel({
       const errMsg: Message = {
         id: crypto.randomUUID(),
         role: "assistant",
-        content: `❌ שגיאה: ${err instanceof Error ? err.message : "הבדיקה נכשלה"}`,
+        content: `❌ שגיאה: ${
+          err instanceof Error
+            ? err.name === "AbortError"
+              ? "הבדיקה לקחה יותר מ-2 דקות ובוטלה — נסה עם טווח שנים קצר יותר"
+              : err.message === "Failed to fetch"
+              ? "השרת לא זמין כרגע — המתן 30 שניות ונסה שוב"
+              : err.message
+            : "הבדיקה נכשלה"
+        }`,
       };
       setMessages(prev => prev.filter(m => m.id !== "running").concat(errMsg));
     } finally {

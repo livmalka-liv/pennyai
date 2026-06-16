@@ -122,14 +122,21 @@ async def scan_and_signal(user_id: str, db: Session) -> list[dict]:
 
     settings = get_settings()
 
-    # Fetch catalyst days once — reused across all strategies
+    # Fetch catalyst days (historical) + today's live movers
     try:
         if settings.use_mock_data or not settings.polygon_api_key:
             from app.data.mock_provider import generate_catalyst_days
             catalyst_days: list[CatalystDay] = generate_catalyst_days(lookback_years=1)
         else:
-            from app.data.polygon_provider import get_catalyst_days
+            from app.data.polygon_provider import get_catalyst_days, get_todays_movers
             catalyst_days = get_catalyst_days(lookback_years=1, api_key=settings.polygon_api_key)
+            # Append today's live movers so the scanner checks current market
+            try:
+                todays = get_todays_movers(api_key=settings.polygon_api_key)
+                catalyst_days = todays + catalyst_days  # prioritise today's at the front
+                logger.info(f"scan_and_signal: added {len(todays)} live movers for today")
+            except Exception as exc:
+                logger.warning(f"scan_and_signal: could not fetch today's movers: {exc}")
     except Exception as exc:
         logger.error(f"scan_and_signal: failed to fetch catalyst days: {exc}")
         return []
