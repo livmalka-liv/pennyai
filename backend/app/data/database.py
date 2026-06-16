@@ -35,5 +35,6 @@ def init_db():
     from app.models.db_models import (  # noqa — imports register tables with SQLAlchemy
         User, PaperTrade, StrategyTracker, OptimizationResult,
         BrokerConnection, BrokerOrder, BacktestRun, BacktestTrade,
+        PolygonCatalystDay,
     )
     Base.metadata.create_all(bind=engine)

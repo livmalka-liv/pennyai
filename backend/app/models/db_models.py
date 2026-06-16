@@ -136,6 +136,22 @@ class BacktestTrade(Base):
     created_at     = Column(DateTime, default=datetime.utcnow)
 
 
+class PolygonCatalystDay(Base):
+    """Real Polygon.io intraday data — persisted in PostgreSQL so deploys don't lose it."""
+    __tablename__ = "polygon_catalyst_days"
+
+    ticker        = Column(String, primary_key=True)
+    date          = Column(String, primary_key=True)   # YYYY-MM-DD
+    open_price    = Column(Float)
+    gap_pct       = Column(Float)
+    day_volume    = Column(Integer)
+    float_shares  = Column(Integer)
+    rvol          = Column(Float)
+    catalyst_type = Column(String)
+    candles_json  = Column(Text)
+    fetched_at    = Column(String)
+
+
 class OptimizationResult(Base):
     """AI-suggested parameter improvements found during forward testing."""
     __tablename__ = "optimization_results"
