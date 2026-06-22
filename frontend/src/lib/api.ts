@@ -115,6 +115,16 @@ export async function runBacktest(strategy: StrategyConfig, userId = "demo"): Pr
   };
 }
 
+export async function clarifyStrategy(
+  description: string,
+  conversation: { role: "user" | "assistant"; content: string }[]
+): Promise<{ message: string; is_ready: boolean; refined_description?: string }> {
+  return apiFetch("/backtest/clarify", {
+    method: "POST",
+    body: JSON.stringify({ description, conversation, language: "he" }),
+  });
+}
+
 export async function getVaultStrategies(tier = "free") {
   return apiFetch<any[]>(`/strategies/vault?tier=${tier}`);
 }

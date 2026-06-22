@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { TrendingUp, Calendar, BarChart2, RefreshCw } from "lucide-react";
+import { TrendingUp, Calendar, BarChart2, RefreshCw, Sun } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const API = (
@@ -27,6 +27,16 @@ interface PeriodRow {
   win_rate: number;
   return_pct: number;
   pnl: number;
+}
+
+interface DailyReport {
+  strategy: string;
+  today_pct: number;
+  today_trades: number;
+  week_pct: number;
+  week_trades: number;
+  month_pct: number;
+  month_trades: number;
 }
 
 type PeriodType = "daily" | "weekly" | "monthly" | "yearly";
@@ -79,6 +89,7 @@ export default function PerformancePage() {
   const [periodRows, setPeriodRows] = useState<PeriodRow[]>([]);
   const [loadingSummary, setLoadingSummary] = useState(true);
   const [loadingPeriod, setLoadingPeriod]   = useState(false);
+  const [dailyReport, setDailyReport] = useState<DailyReport[]>([]);
 
   // Load summary list — no selectedStrategy in deps to avoid infinite loop
   const loadSummary = useCallback(async () => {
@@ -91,6 +102,11 @@ export default function PerformancePage() {
       setSummaries(list);
       // Only set default once — use functional update to read current state
       setSelectedStrategy((prev) => (prev || (list.length > 0 ? list[0].strategy : "")));
+      // Also load daily report
+      try {
+        const dr = await fetch(`${API}/performance/daily-report`);
+        if (dr.ok) setDailyReport(await dr.json());
+      } catch { /* non-critical */ }
     } catch {
       setSummaries([]);
     } finally {
@@ -149,6 +165,54 @@ export default function PerformancePage() {
             רענן
           </button>
         </div>
+
+        {/* Daily Report */}
+        {dailyReport.length > 0 && (
+          <div className="mb-8 rounded-xl border border-[#1E293B] bg-[#0D1117] overflow-hidden">
+            <div className="flex items-center gap-2 border-b border-[#1E293B] px-5 py-3">
+              <Sun className="h-4 w-4 text-yellow-400" />
+              <span className="text-sm font-semibold text-[#F8FAFC]">דוח יומי</span>
+              <span className="text-xs text-[#475569]">{new Date().toLocaleDateString("he-IL")}</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[#1E293B] text-[#64748B] text-xs">
+                    <th className="px-5 py-2.5 text-right font-medium">אסטרטגיה</th>
+                    <th className="px-4 py-2.5 text-center font-medium">היום</th>
+                    <th className="px-4 py-2.5 text-center font-medium">השבוע</th>
+                    <th className="px-4 py-2.5 text-center font-medium">החודש</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#1E293B]">
+                  {dailyReport.map((row) => (
+                    <tr key={row.strategy} className="hover:bg-[#131A26] transition-colors">
+                      <td className="px-5 py-3 text-right font-medium text-[#F8FAFC]">{row.strategy}</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={cn("font-semibold", row.today_pct >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                          {pct(row.today_pct)}
+                        </span>
+                        {row.today_trades > 0 && <span className="ml-1 text-[10px] text-[#475569]">({row.today_trades})</span>}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={cn("font-semibold", row.week_pct >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                          {pct(row.week_pct)}
+                        </span>
+                        {row.week_trades > 0 && <span className="ml-1 text-[10px] text-[#475569]">({row.week_trades})</span>}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={cn("font-semibold", row.month_pct >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                          {pct(row.month_pct)}
+                        </span>
+                        {row.month_trades > 0 && <span className="ml-1 text-[10px] text-[#475569]">({row.month_trades})</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {/* Empty state */}
         {isEmpty && (

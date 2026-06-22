@@ -1,7 +1,7 @@
 """Performance reporting endpoints — powered by PaperTrade history."""
 
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -206,3 +206,49 @@ def get_active_strategies(db: Session = Depends(get_db)):
 
     result.sort(key=lambda x: x["win_rate"], reverse=True)
     return result
+
+
+# ---------------------------------------------------------------------------
+# GET /performance/daily-report
+# ---------------------------------------------------------------------------
+
+@router.get("/daily-report")
+def get_daily_report(db: Session = Depends(get_db)):
+    """Per-strategy breakdown: today / this week / this month return %."""
+    today_str       = date.today().isoformat()
+    week_start_str  = (date.today() - timedelta(days=date.today().weekday())).isoformat()
+    month_start_str = date.today().replace(day=1).isoformat()
+
+    rows = (
+        db.query(PaperTrade)
+        .filter(
+            PaperTrade.status.in_(["win", "loss", "flat"]),
+            PaperTrade.trade_date >= month_start_str,
+        )
+        .all()
+    )
+
+    by_strategy: dict[str, list[PaperTrade]] = defaultdict(list)
+    for t in rows:
+        by_strategy[t.strategy_name].append(t)
+
+    def _sum(trades: list[PaperTrade]) -> float:
+        vals = [t.return_pct for t in trades if t.return_pct is not None]
+        return round(sum(vals), 2) if vals else 0.0
+
+    report = []
+    for strategy, trades in by_strategy.items():
+        today_t = [t for t in trades if t.trade_date == today_str]
+        week_t  = [t for t in trades if t.trade_date >= week_start_str]
+        report.append({
+            "strategy":     strategy,
+            "today_pct":    _sum(today_t),
+            "today_trades": len(today_t),
+            "week_pct":     _sum(week_t),
+            "week_trades":  len(week_t),
+            "month_pct":    _sum(trades),
+            "month_trades": len(trades),
+        })
+
+    report.sort(key=lambda x: x["today_pct"], reverse=True)
+    return report

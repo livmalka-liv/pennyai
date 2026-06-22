@@ -9,9 +9,13 @@ import {
   XCircle,
   Clock,
   RefreshCw,
+  MessageSquare,
+  Send,
+  Sparkles,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { parseStrategy, runBacktest } from "@/lib/api";
+import { parseStrategy, runBacktest, clarifyStrategy } from "@/lib/api";
 import type { BacktestResult } from "@/types";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -29,6 +33,11 @@ interface LabStrategy {
   status: "idle" | "running" | "done" | "error";
   result?: BacktestResult;
   error?: string;
+}
+
+interface ChatMsg {
+  role: "user" | "assistant";
+  content: string;
 }
 
 const STORAGE_KEY = "strategy_lab_strategies";
@@ -140,6 +149,13 @@ export default function StrategyLabPage() {
   const [strategies, setStrategies] = useState<LabStrategy[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  // AI clarification chat
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMsgs, setChatMsgs] = useState<ChatMsg[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatRefined, setChatRefined] = useState<string | null>(null);
+
   // Load from localStorage on mount
   useEffect(() => {
     const stored = loadFromStorage();
@@ -239,6 +255,52 @@ export default function StrategyLabPage() {
     },
     [strategies]
   );
+
+  // ── AI chat ──────────────────────────────────────────────────────────────────
+
+  const openChat = useCallback(async () => {
+    if (!selected) return;
+    setChatOpen(true);
+    setChatMsgs([]);
+    setChatRefined(null);
+    setChatInput("");
+    setChatLoading(true);
+    try {
+      const res = await clarifyStrategy(selected.description, []);
+      setChatMsgs([{ role: "assistant", content: res.message }]);
+      if (res.is_ready) setChatRefined(res.refined_description ?? null);
+    } catch {
+      setChatMsgs([{ role: "assistant", content: "לא הצלחתי להתחבר לשרת. נסה שוב." }]);
+    } finally {
+      setChatLoading(false);
+    }
+  }, [selected]);
+
+  const sendChatMsg = useCallback(async () => {
+    if (!selected || !chatInput.trim() || chatLoading) return;
+    const userMsg: ChatMsg = { role: "user", content: chatInput.trim() };
+    const next = [...chatMsgs, userMsg];
+    setChatMsgs(next);
+    setChatInput("");
+    setChatLoading(true);
+    try {
+      const res = await clarifyStrategy(selected.description, next);
+      setChatMsgs((prev) => [...prev, { role: "assistant", content: res.message }]);
+      if (res.is_ready) setChatRefined(res.refined_description ?? selected.description);
+    } catch {
+      setChatMsgs((prev) => [...prev, { role: "assistant", content: "שגיאה בתקשורת עם השרת." }]);
+    } finally {
+      setChatLoading(false);
+    }
+  }, [selected, chatInput, chatMsgs, chatLoading]);
+
+  const applyRefined = useCallback(() => {
+    if (!chatRefined) return;
+    updateSelected({ description: chatRefined });
+    setChatOpen(false);
+    setChatMsgs([]);
+    setChatRefined(null);
+  }, [chatRefined, updateSelected]);
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
@@ -430,6 +492,96 @@ export default function StrategyLabPage() {
                       className="w-full resize-y rounded-lg border border-[#1E293B] bg-[#080B10] px-3 py-2.5 text-sm text-[#F8FAFC] placeholder-[#475569] outline-none focus:border-[#6366F1] transition-colors leading-relaxed"
                     />
                   </div>
+
+                  {/* AI Chat button */}
+                  <div className="mb-4">
+                    <button
+                      onClick={chatOpen ? () => { setChatOpen(false); setChatMsgs([]); setChatRefined(null); } : openChat}
+                      disabled={!selected.description.trim()}
+                      className={cn(
+                        "flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-all",
+                        chatOpen
+                          ? "border-[#6366F1]/50 bg-[#6366F1]/10 text-[#6366F1]"
+                          : "border-[#1E293B] text-[#64748B] hover:border-[#6366F1]/40 hover:text-[#6366F1] disabled:opacity-40 disabled:cursor-not-allowed"
+                      )}
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      {chatOpen ? "סגור AI" : "שכלל עם AI"}
+                    </button>
+                  </div>
+
+                  {/* AI Chat panel */}
+                  {chatOpen && (
+                    <div className="mb-4 rounded-xl border border-[#6366F1]/20 bg-[#080B10] overflow-hidden">
+                      <div className="flex items-center justify-between border-b border-[#1E293B] px-4 py-2.5">
+                        <div className="flex items-center gap-2 text-xs font-medium text-[#6366F1]">
+                          <MessageSquare className="h-3.5 w-3.5" />
+                          AI מנתח אסטרטגיה — שאלות הבהרה
+                        </div>
+                        <button onClick={() => { setChatOpen(false); setChatMsgs([]); setChatRefined(null); }} className="text-[#475569] hover:text-[#94A3B8]">
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+
+                      {/* Messages */}
+                      <div className="max-h-64 overflow-y-auto px-4 py-3 space-y-2">
+                        {chatMsgs.map((m, i) => (
+                          <div key={i} className={cn("flex", m.role === "user" ? "justify-start" : "justify-end")}>
+                            <div className={cn(
+                              "max-w-[85%] rounded-xl px-3 py-2 text-sm leading-relaxed",
+                              m.role === "user"
+                                ? "bg-[#6366F1]/15 text-[#A5B4FC]"
+                                : "bg-[#131A26] text-[#CBD5E1]"
+                            )}>
+                              {m.content}
+                            </div>
+                          </div>
+                        ))}
+                        {chatLoading && (
+                          <div className="flex justify-end">
+                            <div className="rounded-xl bg-[#131A26] px-3 py-2">
+                              <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#6366F1]" />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Refined apply button */}
+                      {chatRefined && (
+                        <div className="border-t border-[#1E293B] px-4 py-2.5">
+                          <button
+                            onClick={applyRefined}
+                            className="flex items-center gap-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/25 transition-all"
+                          >
+                            <CheckCircle className="h-3.5 w-3.5" />
+                            החל תיאור מעודכן
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Input */}
+                      {!chatRefined && (
+                        <div className="border-t border-[#1E293B] flex items-center gap-2 px-3 py-2">
+                          <input
+                            type="text"
+                            value={chatInput}
+                            onChange={(e) => setChatInput(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && sendChatMsg()}
+                            placeholder="הקלד תשובה..."
+                            disabled={chatLoading}
+                            className="flex-1 bg-transparent text-sm text-[#F8FAFC] placeholder-[#475569] outline-none"
+                          />
+                          <button
+                            onClick={sendChatMsg}
+                            disabled={!chatInput.trim() || chatLoading}
+                            className="flex h-7 w-7 items-center justify-center rounded-lg text-[#6366F1] hover:bg-[#6366F1]/10 disabled:opacity-40 transition-all"
+                          >
+                            <Send className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Period selector */}
                   <div className="mb-6">
