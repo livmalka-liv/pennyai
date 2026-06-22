@@ -514,7 +514,7 @@ function ResultsPanel({ result }: { result: BacktestResult }) {
           color={m.totalRoi >= 0 ? "text-emerald-400" : "text-rose-400"}
         />
         <MetricCard
-          label="סה\"כ עסקאות"
+          label="סהכ עסקאות"
           value={String(m.totalTrades)}
         />
         <MetricCard
