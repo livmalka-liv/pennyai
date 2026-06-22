@@ -85,23 +85,24 @@ def run_backtest(strategy: StrategyConfig) -> BacktestResult:
     logger.info(f"Starting backtest: {strategy.name}, {strategy.lookback_years}yr")
     settings = get_settings()
 
+    from app.data.mock_provider import generate_catalyst_days as gen_mock
     if settings.use_mock_data or not settings.polygon_api_key:
-        from app.data.mock_provider import generate_catalyst_days
-        catalyst_days = generate_catalyst_days(lookback_years=strategy.lookback_years)
+        catalyst_days = gen_mock(lookback_years=strategy.lookback_years)
     else:
-        from app.data.polygon_provider import get_catalyst_days
-        catalyst_days = get_catalyst_days(strategy.lookback_years, settings.polygon_api_key)
+        try:
+            import concurrent.futures
+            from app.data.polygon_provider import get_catalyst_days
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(get_catalyst_days, strategy.lookback_years, settings.polygon_api_key)
+                catalyst_days = future.result(timeout=8)
+        except Exception:
+            logger.warning("Polygon data fetch failed/timed out — using mock data")
+            catalyst_days = gen_mock(lookback_years=strategy.lookback_years)
 
-    # If real data is too sparse (<50 days for requested period), supplement with mock
-    min_expected = max(50, strategy.lookback_years * 30)
+    # Supplement with mock if real data is sparse
+    min_expected = max(int(strategy.lookback_years * 30), 5)
     if len(catalyst_days) < min_expected:
-        logger.warning(
-            f"Only {len(catalyst_days)} real days cached for {strategy.lookback_years}yr "
-            f"(expected ~{min_expected}). Supplementing with synthetic data."
-        )
-        from app.data.mock_provider import generate_catalyst_days as gen_mock
         mock_days = gen_mock(lookback_years=strategy.lookback_years)
-        # Real data takes precedence — deduplicate by (ticker, date)
         real_keys = {(d.ticker, str(d.date)) for d in catalyst_days}
         catalyst_days = catalyst_days + [d for d in mock_days if (d.ticker, str(d.date)) not in real_keys]
         logger.info(f"Total after supplement: {len(catalyst_days)} days")
