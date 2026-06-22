@@ -2,7 +2,7 @@
 
 import uuid
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.data.database import get_db
@@ -18,12 +18,12 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 class RegisterBody(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
 
 class LoginBody(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
 
