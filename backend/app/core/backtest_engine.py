@@ -99,7 +99,7 @@ def run_backtest(strategy: StrategyConfig) -> BacktestResult:
                 pass
         t = threading.Thread(target=_fetch, daemon=True)
         t.start()
-        t.join(timeout=8)
+        t.join(timeout=2)
         if _result:
             catalyst_days = _result[0]
         else:
