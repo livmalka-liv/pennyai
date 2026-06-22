@@ -43,22 +43,24 @@ interface ChatMsg {
 const STORAGE_KEY = "strategy_lab_strategies";
 const MAX_STRATEGIES = 15;
 const PERIOD_OPTIONS: PeriodOption[] = [
-  { value: 1 / 12, label: "1M" },
-  { value: 3 / 12, label: "3M" },
-  { value: 6 / 12, label: "6M" },
-  { value: 1,      label: "1Y" },
-  { value: 3,      label: "3Y" },
-  { value: 5,      label: "5Y" },
-  { value: 10,     label: "10Y" },
-  { value: 15,     label: "15Y" },
-  { value: 20,     label: "20Y" },
+  { value: 1  / 365, label: "1D"  },
+  { value: 5  / 365, label: "5D"  },
+  { value: 10 / 365, label: "10D" },
+  { value: 1  / 12,  label: "1M"  },
+  { value: 3  / 12,  label: "3M"  },
+  { value: 6  / 12,  label: "6M"  },
+  { value: 1,        label: "1Y"  },
+  { value: 3,        label: "3Y"  },
+  { value: 5,        label: "5Y"  },
+  { value: 10,       label: "10Y" },
+  { value: 15,       label: "15Y" },
+  { value: 20,       label: "20Y" },
 ];
 
 function formatPeriod(years: number): string {
-  if (years < 1) {
-    const months = Math.round(years * 12);
-    return months === 1 ? "חודש 1" : `${months} חודשים`;
-  }
+  const days = years * 365;
+  if (days < 14)  return `${Math.round(days)} ימים`;
+  if (years < 1)  { const m = Math.round(years * 12); return m === 1 ? "חודש" : `${m} חודשים`; }
   return `${years} שנים`;
 }
 

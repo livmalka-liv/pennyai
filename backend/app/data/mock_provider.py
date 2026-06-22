@@ -49,7 +49,7 @@ def generate_catalyst_days(
         cur += timedelta(days=1)
 
     # Sample a fixed number of catalyst days (predictable performance)
-    target = min(len(trading_days), int(lookback_years * CATALYSTS_PER_YEAR))
+    target = min(len(trading_days), max(3, int(lookback_years * CATALYSTS_PER_YEAR)))
     sampled = sorted(rng.sample(trading_days, target))
 
     days: list[CatalystDay] = []
