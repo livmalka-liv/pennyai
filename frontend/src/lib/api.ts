@@ -42,7 +42,8 @@ export async function runBacktest(strategy: StrategyConfig, userId = "demo"): Pr
   };
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 120_000); // 2-minute timeout
+  const minutes = Math.max(3, Math.ceil(strategy.lookbackYears * 0.5));
+  const timeoutId = setTimeout(() => controller.abort(), minutes * 60_000);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const raw = await apiFetch<any>("/backtest/run", {

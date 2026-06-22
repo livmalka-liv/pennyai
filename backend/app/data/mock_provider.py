@@ -14,7 +14,7 @@ import numpy as np
 from app.data.types import CandleData, CatalystDay
 
 # Module-level cache — generated once per process lifetime, per lookback_years
-_MOCK_CACHE: dict[int, list] = {}
+_MOCK_CACHE: dict[float, list] = {}
 
 PENNY_TICKERS = [
     "TNXP", "MULN", "SNDL", "MVIS", "WKHS", "FFIE", "NKLA", "IDEX",
@@ -27,7 +27,7 @@ CATALYSTS_PER_YEAR = 35
 
 
 def generate_catalyst_days(
-    lookback_years: int = 5,
+    lookback_years: float = 5.0,
     min_rvol: float = 2.0,
     max_float_m: float = 50.0,
 ) -> list[CatalystDay]:
@@ -38,7 +38,7 @@ def generate_catalyst_days(
     rng = random.Random(42)
 
     end = date.today()
-    start = date(end.year - lookback_years, end.month, end.day)
+    start = end - timedelta(days=int(lookback_years * 365.25))
 
     # Collect all trading days in the range
     trading_days: list[date] = []
@@ -49,7 +49,7 @@ def generate_catalyst_days(
         cur += timedelta(days=1)
 
     # Sample a fixed number of catalyst days (predictable performance)
-    target = min(len(trading_days), lookback_years * CATALYSTS_PER_YEAR)
+    target = min(len(trading_days), int(lookback_years * CATALYSTS_PER_YEAR))
     sampled = sorted(rng.sample(trading_days, target))
 
     days: list[CatalystDay] = []

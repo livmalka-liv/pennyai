@@ -320,9 +320,9 @@ def backfill_history(years: int, api_key: str):
     return total
 
 
-def get_catalyst_days(lookback_years: int, api_key: str) -> list[CatalystDay]:
+def get_catalyst_days(lookback_years: float, api_key: str) -> list[CatalystDay]:
     end = date.today()
-    start = date(end.year - lookback_years, end.month, end.day)
+    start = end - timedelta(days=int(lookback_years * 365.25))
     cached = _get_cached_days(start, end)
 
     if not cached:

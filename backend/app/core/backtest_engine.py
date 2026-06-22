@@ -380,7 +380,7 @@ def _calculate_metrics(
     trades: list[TradeResult],
     starting_capital: float,
     final_equity: float,
-    lookback_years: int,
+    lookback_years: float,
 ) -> BacktestMetrics:
     if not trades:
         return BacktestMetrics(

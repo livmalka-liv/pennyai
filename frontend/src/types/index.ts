@@ -1,6 +1,6 @@
 export type SubscriptionTier = "free" | "tester" | "pro" | "elite";
 
-export type LookbackYears = 1 | 3 | 5 | 10 | 15 | 20;
+export type LookbackYears = number;
 
 export interface User {
   id: string;

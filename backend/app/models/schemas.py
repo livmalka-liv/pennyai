@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 from enum import Enum
 
 
@@ -36,7 +36,7 @@ class StrategyConfig(BaseModel):
     rules: list[StrategyRule]
     slippage: float = Field(ge=0, le=10, description="Slippage as % of trade value")
     timeframe: Timeframe = Timeframe.ONE_MIN
-    lookback_years: Literal[1, 3, 5, 10, 15, 20] = 5
+    lookback_years: float = Field(default=5.0, ge=0.08, le=20.0)
 
 
 class ParseStrategyRequest(BaseModel):

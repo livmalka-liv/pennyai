@@ -107,7 +107,7 @@ class BacktestRun(Base):
     id             = Column(String, primary_key=True)
     user_id        = Column(String, index=True, nullable=True)
     strategy_name  = Column(String, nullable=False, index=True)
-    lookback_years = Column(Integer, nullable=False)
+    lookback_years = Column(Float, nullable=False)
     total_trades   = Column(Integer, default=0)
     win_rate       = Column(Float, default=0)
     total_roi      = Column(Float, default=0)

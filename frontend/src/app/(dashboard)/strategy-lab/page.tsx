@@ -16,13 +16,16 @@ import type { BacktestResult } from "@/types";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type YearsOption = 1 | 3 | 5 | 10 | 15 | 20;
+interface PeriodOption {
+  value: number; // years as float (e.g. 0.0833 = 1 month)
+  label: string; // display label
+}
 
 interface LabStrategy {
   id: string;
   name: string;
   description: string;
-  years: YearsOption;
+  years: number;
   status: "idle" | "running" | "done" | "error";
   result?: BacktestResult;
   error?: string;
@@ -30,7 +33,25 @@ interface LabStrategy {
 
 const STORAGE_KEY = "strategy_lab_strategies";
 const MAX_STRATEGIES = 15;
-const YEARS_OPTIONS: YearsOption[] = [1, 3, 5, 10, 15, 20];
+const PERIOD_OPTIONS: PeriodOption[] = [
+  { value: 1 / 12, label: "1M" },
+  { value: 3 / 12, label: "3M" },
+  { value: 6 / 12, label: "6M" },
+  { value: 1,      label: "1Y" },
+  { value: 3,      label: "3Y" },
+  { value: 5,      label: "5Y" },
+  { value: 10,     label: "10Y" },
+  { value: 15,     label: "15Y" },
+  { value: 20,     label: "20Y" },
+];
+
+function formatPeriod(years: number): string {
+  if (years < 1) {
+    const months = Math.round(years * 12);
+    return months === 1 ? "חודש 1" : `${months} חודשים`;
+  }
+  return `${years} שנים`;
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -293,7 +314,7 @@ export default function StrategyLabPage() {
                         <div className="mt-2 flex items-center gap-2">
                           <StatusBadge status={strat.status} />
                           <span className="text-[10px] text-[#475569]">
-                            {strat.years}Y
+                            {PERIOD_OPTIONS.find(p => p.value === strat.years)?.label ?? `${strat.years}Y`}
                           </span>
                         </div>
                       </div>
@@ -410,24 +431,24 @@ export default function StrategyLabPage() {
                     />
                   </div>
 
-                  {/* Years selector */}
+                  {/* Period selector */}
                   <div className="mb-6">
                     <label className="mb-2 block text-xs font-medium text-[#64748B] uppercase tracking-wider">
                       תקופת בדיקה
                     </label>
                     <div className="flex gap-2 flex-wrap">
-                      {YEARS_OPTIONS.map((y) => (
+                      {PERIOD_OPTIONS.map((opt) => (
                         <button
-                          key={y}
-                          onClick={() => updateSelected({ years: y })}
+                          key={opt.value}
+                          onClick={() => updateSelected({ years: opt.value })}
                           className={cn(
                             "rounded-lg border px-4 py-2 text-sm font-semibold transition-all",
-                            selected.years === y
+                            selected.years === opt.value
                               ? "border-[#6366F1] bg-[#6366F1]/15 text-[#6366F1]"
                               : "border-[#1E293B] text-[#64748B] hover:border-[#263147] hover:text-[#94A3B8]"
                           )}
                         >
-                          {y}Y
+                          {opt.label}
                         </button>
                       ))}
                     </div>
@@ -492,7 +513,7 @@ function ResultsPanel({ result }: { result: BacktestResult }) {
       <div className="mb-5 flex items-center gap-2">
         <CheckCircle className="h-5 w-5 text-emerald-400" />
         <h2 className="text-base font-semibold text-[#F8FAFC]">תוצאות הבדיקה</h2>
-        <span className="text-xs text-[#64748B]">({result.strategy.lookbackYears} שנים)</span>
+        <span className="text-xs text-[#64748B]">({formatPeriod(result.strategy.lookbackYears)})</span>
       </div>
 
       {/* 4 metric cards */}
