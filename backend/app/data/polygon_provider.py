@@ -124,7 +124,7 @@ def _polygon_get(path: str, params: dict, api_key: str, retries: int = 3) -> dic
     params["apiKey"] = api_key
     for attempt in range(retries):
         try:
-            with httpx.Client(timeout=30) as client:
+            with httpx.Client(timeout=5) as client:
                 resp = client.get(url, params=params)
             if resp.status_code == 429:
                 time.sleep(12 * (attempt + 1))

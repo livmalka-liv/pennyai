@@ -89,14 +89,21 @@ def run_backtest(strategy: StrategyConfig) -> BacktestResult:
     if settings.use_mock_data or not settings.polygon_api_key:
         catalyst_days = gen_mock(lookback_years=strategy.lookback_years)
     else:
-        try:
-            import concurrent.futures
-            from app.data.polygon_provider import get_catalyst_days
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                future = ex.submit(get_catalyst_days, strategy.lookback_years, settings.polygon_api_key)
-                catalyst_days = future.result(timeout=8)
-        except Exception:
-            logger.warning("Polygon data fetch failed/timed out — using mock data")
+        import threading
+        _result: list = []
+        def _fetch():
+            try:
+                from app.data.polygon_provider import get_catalyst_days
+                _result.append(get_catalyst_days(strategy.lookback_years, settings.polygon_api_key))
+            except Exception:
+                pass
+        t = threading.Thread(target=_fetch, daemon=True)
+        t.start()
+        t.join(timeout=8)
+        if _result:
+            catalyst_days = _result[0]
+        else:
+            logger.warning("Polygon fetch timed out — using mock data")
             catalyst_days = gen_mock(lookback_years=strategy.lookback_years)
 
     # Supplement with mock if real data is sparse
