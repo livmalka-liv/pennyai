@@ -13,6 +13,7 @@ import uuid
 import math
 import logging
 from datetime import datetime, date
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -286,7 +287,7 @@ def _candles_to_df(candles) -> pd.DataFrame:
     return df
 
 
-def _detect_entry_signal(df: pd.DataFrame, strategy: StrategyConfig) -> tuple[int, float] | None:
+def _detect_entry_signal(df: pd.DataFrame, strategy: StrategyConfig) -> Optional[tuple]:
     entry_rules = [r for r in strategy.rules if r.type == RuleType.ENTRY]
     if not entry_rules:
         return None
@@ -515,7 +516,7 @@ def _calculate_burn_analysis(
     trades: list[TradeResult],
     equity_curve: list[EquityPoint],
     starting_capital: float,
-) -> BurnAnalysis | None:
+) -> Optional[BurnAnalysis]:
     if len(equity_curve) < 2 or not trades:
         return None
 

@@ -6,6 +6,7 @@ simultaneously against live Polygon data.
 import uuid
 import logging
 from datetime import datetime, timezone, date
+from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -30,7 +31,7 @@ def _is_market_open() -> bool:
     return open_total <= now_et_total < close_total
 
 
-async def scan_and_save_signals(db: Session, user_id: str | None = None) -> int:
+async def scan_and_save_signals(db: Session, user_id: Optional[str] = None) -> int:
     """
     Scan active custom strategies and save new signals as PaperTrades.
     If user_id is given, scans only that user; otherwise scans all users (scheduler job).
@@ -199,7 +200,7 @@ def get_active_strategies(user_id: str, db: Session) -> list[dict]:
     ]
 
 
-def _get_ibkr_gateway_url(user_id: str, db: Session) -> str | None:
+def _get_ibkr_gateway_url(user_id: str, db: Session) -> Optional[str]:
     """
     Return the IBKR gateway URL for the user's first connected IBKR broker,
     or None if they have no connected IBKR connection.
