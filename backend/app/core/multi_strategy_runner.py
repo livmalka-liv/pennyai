@@ -193,10 +193,43 @@ def get_active_strategies(user_id: str, db: Session) -> list[dict]:
     ]
 
 
+def _get_ibkr_gateway_url(user_id: str, db: Session) -> str | None:
+    """
+    Return the IBKR gateway URL for the user's first connected IBKR broker,
+    or None if they have no connected IBKR connection.
+    """
+    from app.models.db_models import BrokerConnection
+    from app.core.broker_manager import decrypt_credentials
+
+    conn = (
+        db.query(BrokerConnection)
+        .filter(
+            BrokerConnection.user_id == user_id,
+            BrokerConnection.broker_type == "ibkr",
+            BrokerConnection.status == "connected",
+        )
+        .order_by(BrokerConnection.last_tested_at.desc())
+        .first()
+    )
+    if not conn or not conn.credentials_enc:
+        return None
+    try:
+        creds = decrypt_credentials(conn.credentials_enc)
+        return creds.get("gateway_url") or None
+    except Exception as exc:
+        logger.debug(f"_get_ibkr_gateway_url: could not decrypt credentials: {exc}")
+        return None
+
+
 async def scan_and_signal(user_id: str, db: Session) -> list[dict]:
     """
-    Main scanner: for each active strategy, fetch the latest Polygon data
-    (lookback_years=1) and check whether entry conditions are met.
+    Main scanner: for each active strategy, fetch the latest market data
+    and check whether entry conditions are met.
+
+    Data source priority:
+      1. IBKR Client Portal (real-time) — if user has a connected IBKR broker
+      2. Polygon.io (15-min delayed) — fallback when IBKR unavailable
+      3. Mock data — fallback when Polygon key is missing or both fail
 
     Returns a list of signal dicts:
         {strategy_name, ticker, entry_price, catalyst_type, rvol, trade_date}
@@ -211,25 +244,39 @@ async def scan_and_signal(user_id: str, db: Session) -> list[dict]:
         return []
 
     settings = get_settings()
+    catalyst_days: list[CatalystDay] = []
 
-    # Fetch catalyst days (historical) + today's live movers
-    try:
-        if settings.use_mock_data or not settings.polygon_api_key:
-            from app.data.mock_provider import generate_catalyst_days
-            catalyst_days: list[CatalystDay] = generate_catalyst_days(lookback_years=1)
-        else:
-            from app.data.polygon_provider import get_catalyst_days, get_todays_movers
-            catalyst_days = get_catalyst_days(lookback_years=1, api_key=settings.polygon_api_key)
-            # Append today's live movers so the scanner checks current market
-            try:
-                todays = get_todays_movers(api_key=settings.polygon_api_key)
-                catalyst_days = todays + catalyst_days  # prioritise today's at the front
-                logger.info(f"scan_and_signal: added {len(todays)} live movers for today")
-            except Exception as exc:
-                logger.warning(f"scan_and_signal: could not fetch today's movers: {exc}")
-    except Exception as exc:
-        logger.error(f"scan_and_signal: failed to fetch catalyst days: {exc}")
-        return []
+    # ── 1. Try IBKR real-time data ────────────────────────────────────────────
+    ibkr_gateway_url = _get_ibkr_gateway_url(user_id, db)
+    if ibkr_gateway_url:
+        try:
+            from app.data.ibkr_provider import get_ibkr_movers
+            ibkr_days = await get_ibkr_movers(ibkr_gateway_url)
+            if ibkr_days:
+                catalyst_days = ibkr_days
+                logger.info(f"scan_and_signal: using IBKR real-time data ({len(ibkr_days)} movers) for user {user_id}")
+        except Exception as exc:
+            logger.warning(f"scan_and_signal: IBKR provider failed: {exc}")
+
+    # ── 2. Fall back to Polygon (delayed) if IBKR gave nothing ───────────────
+    if not catalyst_days:
+        try:
+            if settings.use_mock_data or not settings.polygon_api_key:
+                from app.data.mock_provider import generate_catalyst_days
+                catalyst_days = generate_catalyst_days(lookback_years=1)
+                logger.info(f"scan_and_signal: using mock data for user {user_id}")
+            else:
+                from app.data.polygon_provider import get_catalyst_days, get_todays_movers
+                catalyst_days = get_catalyst_days(lookback_years=1, api_key=settings.polygon_api_key)
+                try:
+                    todays = get_todays_movers(api_key=settings.polygon_api_key)
+                    catalyst_days = todays + catalyst_days
+                    logger.info(f"scan_and_signal: using Polygon (delayed) + {len(todays)} live movers for user {user_id}")
+                except Exception as exc:
+                    logger.warning(f"scan_and_signal: could not fetch today's Polygon movers: {exc}")
+        except Exception as exc:
+            logger.error(f"scan_and_signal: failed to fetch catalyst days: {exc}")
+            return []
 
     signals: list[dict] = []
 
