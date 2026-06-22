@@ -66,6 +66,17 @@ def login(body: LoginBody, db: Session = Depends(get_db)):
     return TokenOut(access_token=token, tier=user.tier, email=user.email)
 
 
+@router.post("/reset-password")
+def reset_password(body: LoginBody, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == body.email).first()
+    if not user:
+        raise HTTPException(404, "משתמש לא נמצא")
+    user.password_hash = hash_password(body.password)
+    db.commit()
+    token = create_access_token(user.id, user.email, user.tier)
+    return TokenOut(access_token=token, tier=user.tier, email=user.email)
+
+
 @router.get("/me")
 def me(user: User = Depends(get_current_user)):
     return {
