@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     stripe_price_elite_monthly: str = ""
     stripe_price_elite_yearly: str = ""
 
+    # Email reports (SMTP)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_pass: str = ""
+    report_email: str = ""   # defaults to smtp_user if blank
+
     # Auth
     jwt_secret: str = "dev-secret-change-in-production"
     jwt_algorithm: str = "HS256"

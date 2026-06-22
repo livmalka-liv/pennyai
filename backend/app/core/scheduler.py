@@ -46,6 +46,25 @@ def start_scheduler():
         finally:
             db.close()
 
+    # ── Email report helpers ──────────────────────────────────────────────────
+    def _send_report(period: str):
+        from app.core.email_service import send_report
+        from app.core.config import get_settings
+        db = SessionLocal()
+        try:
+            send_report(db, period, get_settings())
+        finally:
+            db.close()
+
+    def sync_daily_report():
+        _send_report("daily")
+
+    def sync_weekly_report():
+        _send_report("weekly")
+
+    def sync_monthly_report():
+        _send_report("monthly")
+
     scheduler.add_job(
         sync_custom_scan,
         "interval",
@@ -61,6 +80,33 @@ def start_scheduler():
         CronTrigger(hour=23, minute=5, timezone="Asia/Jerusalem"),
         id="eod_close",
         name="EOD paper trade closer",
+        replace_existing=True,
+    )
+
+    # Daily report — 23:30 Israel (after market close + 30 min buffer)
+    scheduler.add_job(
+        sync_daily_report,
+        CronTrigger(hour=23, minute=30, timezone="Asia/Jerusalem"),
+        id="daily_email_report",
+        name="Daily performance email",
+        replace_existing=True,
+    )
+
+    # Weekly report — Sunday 23:30 Israel
+    scheduler.add_job(
+        sync_weekly_report,
+        CronTrigger(day_of_week="sun", hour=23, minute=30, timezone="Asia/Jerusalem"),
+        id="weekly_email_report",
+        name="Weekly performance email",
+        replace_existing=True,
+    )
+
+    # Monthly report — 1st of month, 08:00 Israel
+    scheduler.add_job(
+        sync_monthly_report,
+        CronTrigger(day=1, hour=8, minute=0, timezone="Asia/Jerusalem"),
+        id="monthly_email_report",
+        name="Monthly performance email",
         replace_existing=True,
     )
 
