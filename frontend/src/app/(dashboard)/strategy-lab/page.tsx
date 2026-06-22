@@ -645,7 +645,7 @@ export default function StrategyLabPage() {
 
                 {/* Results card */}
                 {selected.status === "done" && selected.result && (
-                  <ResultsPanel result={selected.result} />
+                  <ResultsPanel result={selected.result} onActivate={() => {}} />
                 )}
               </div>
             )}
@@ -658,16 +658,48 @@ export default function StrategyLabPage() {
 
 // ── Results panel ──────────────────────────────────────────────────────────────
 
-function ResultsPanel({ result }: { result: BacktestResult }) {
+function ResultsPanel({ result, onActivate }: { result: BacktestResult; onActivate?: () => void }) {
   const m = result.metrics;
+  const [activating, setActivating] = useState(false);
+  const [activated, setActivated] = useState(false);
+
+  async function handleActivate() {
+    if (!onActivate) return;
+    setActivating(true);
+    try {
+      const { activateForLiveScan } = await import("@/lib/api");
+      await activateForLiveScan(result.strategy);
+      setActivated(true);
+      onActivate();
+    } catch {
+      // silently ignore — user may not be logged in
+    } finally {
+      setActivating(false);
+    }
+  }
 
   return (
     <div className="rounded-xl border border-[#1E293B] bg-[#0D1117] p-6">
       {/* Header */}
-      <div className="mb-5 flex items-center gap-2">
+      <div className="mb-5 flex items-center gap-2 flex-wrap">
         <CheckCircle className="h-5 w-5 text-emerald-400" />
         <h2 className="text-base font-semibold text-[#F8FAFC]">תוצאות הבדיקה</h2>
         <span className="text-xs text-[#64748B]">({formatPeriod(result.strategy.lookbackYears)})</span>
+        <div className="mr-auto">
+          <button
+            onClick={handleActivate}
+            disabled={activating || activated}
+            className={cn(
+              "flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all",
+              activated
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+                : "border-[#6366F1]/30 text-[#6366F1] hover:bg-[#6366F1]/10 disabled:opacity-50"
+            )}
+          >
+            {activated ? <CheckCircle className="h-3 w-3" /> : activating ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+            {activated ? "פועל בסריקה חיה" : "הפעל בסריקה חיה"}
+          </button>
+        </div>
       </div>
 
       {/* 4 metric cards */}

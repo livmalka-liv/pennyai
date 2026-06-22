@@ -115,6 +115,43 @@ export async function runBacktest(strategy: StrategyConfig, userId = "demo"): Pr
   };
 }
 
+export async function activateForLiveScan(strategy: StrategyConfig): Promise<{ tracker_id: string }> {
+  return apiFetch("/live-strategies/activate", {
+    method: "POST",
+    body: JSON.stringify({
+      strategy: {
+        name: strategy.name,
+        description: strategy.description,
+        rules: strategy.rules,
+        slippage: strategy.slippage,
+        timeframe: strategy.timeframe,
+        lookback_years: strategy.lookbackYears,
+      },
+    }),
+  });
+}
+
+export async function getMySignals(days = 7) {
+  return apiFetch<SignalRow[]>(`/live-strategies/signals?days=${days}`);
+}
+
+export interface SignalRow {
+  id: string;
+  strategy_name: string;
+  ticker: string;
+  trade_date: string;
+  entry_time_et: string;
+  entry_price: number;
+  tp_price: number | null;
+  sl_price: number | null;
+  exit_price: number | null;
+  return_pct: number | null;
+  status: "open" | "win" | "loss" | "flat";
+  exit_reason: string | null;
+  catalyst: string | null;
+  rvol: number | null;
+}
+
 export async function clarifyStrategy(
   description: string,
   conversation: { role: "user" | "assistant"; content: string }[]

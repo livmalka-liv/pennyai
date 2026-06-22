@@ -5,14 +5,104 @@ simultaneously against live Polygon data.
 
 import uuid
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, date
 
 from sqlalchemy.orm import Session
 
-from app.models.db_models import StrategyTracker
+from app.models.db_models import StrategyTracker, PaperTrade
 from app.data.types import CatalystDay
 
 logger = logging.getLogger(__name__)
+
+ISRAEL_UTC_OFFSET = 3   # summer IDT UTC+3
+ET_UTC_OFFSET     = -4  # summer EDT UTC-4
+POSITION_DOLLARS  = 1000
+
+
+def _is_market_open() -> bool:
+    """Return True if current time is within US regular market hours (9:30–16:00 ET)."""
+    now_utc = datetime.now(timezone.utc)
+    now_et_hour  = (now_utc.hour + ET_UTC_OFFSET) % 24
+    now_et_min   = now_utc.minute
+    now_et_total = now_et_hour * 60 + now_et_min
+    open_total   = 9 * 60 + 30
+    close_total  = 16 * 60
+    return open_total <= now_et_total < close_total
+
+
+async def scan_and_save_signals(db: Session) -> int:
+    """
+    Scheduled job: scan all users' active custom strategies, save new signals as PaperTrades.
+    Returns the number of new signals saved.
+    """
+    if not _is_market_open():
+        logger.debug("scan_and_save_signals: market closed, skipping")
+        return 0
+
+    # Collect all unique user_ids with active custom strategies
+    rows = (
+        db.query(StrategyTracker.user_id)
+        .filter(StrategyTracker.is_active == True)  # noqa: E712
+        .distinct()
+        .all()
+    )
+    if not rows:
+        return 0
+
+    today = date.today().isoformat()
+    now_utc = datetime.now(timezone.utc)
+    entry_time_il = f"{(now_utc.hour + ISRAEL_UTC_OFFSET) % 24:02d}:{now_utc.minute:02d}"
+    entry_time_et = f"{(now_utc.hour + ET_UTC_OFFSET) % 24:02d}:{now_utc.minute:02d}"
+
+    new_signals = 0
+    for (user_id,) in rows:
+        if not user_id:
+            continue
+        try:
+            signals = await scan_and_signal(user_id, db)
+        except Exception as exc:
+            logger.warning(f"scan_and_save_signals: scan failed for {user_id}: {exc}")
+            continue
+
+        for sig in signals:
+            # Deduplicate: skip if same strategy+ticker already open today
+            existing = (
+                db.query(PaperTrade)
+                .filter(
+                    PaperTrade.strategy_name == sig["strategy_name"],
+                    PaperTrade.ticker == sig["ticker"],
+                    PaperTrade.trade_date == today,
+                )
+                .first()
+            )
+            if existing:
+                continue
+
+            entry = sig["entry_price"]
+            trade = PaperTrade(
+                id=str(uuid.uuid4()),
+                strategy_id=f"custom:{user_id}:{sig['strategy_name']}",
+                strategy_name=sig["strategy_name"],
+                ticker=sig["ticker"],
+                trade_date=today,
+                entry_time=entry_time_il,
+                entry_time_et=entry_time_et,
+                entry_price=entry,
+                tp_price=round(entry * 1.15, 4),
+                sl_price=round(entry * 0.95, 4),
+                status="open",
+                session="regular",
+                catalyst=sig.get("catalyst_type"),
+                rvol=sig.get("rvol"),
+                variant="custom",
+            )
+            db.add(trade)
+            new_signals += 1
+
+    if new_signals:
+        db.commit()
+        logger.info(f"scan_and_save_signals: saved {new_signals} new signals")
+    return new_signals
 
 
 async def activate_strategy(user_id: str, strategy: dict, db: Session) -> str:

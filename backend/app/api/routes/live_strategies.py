@@ -1,17 +1,20 @@
-"""Live strategy management — activate, deactivate, list, and scan active strategies."""
+"""Live strategy management — activate, deactivate, list, scan, and signals."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import date, timedelta
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.data.database import get_db
 from app.core.auth import get_current_user
-from app.models.db_models import User
+from app.models.db_models import User, PaperTrade
 from app.core.multi_strategy_runner import (
     activate_strategy,
     deactivate_strategy,
     get_active_strategies,
     scan_and_signal,
+    scan_and_save_signals,
+    _is_market_open,
 )
 
 router = APIRouter(prefix="/live-strategies", tags=["live-strategies"])
@@ -67,9 +70,48 @@ async def scan(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Manually trigger a scan across all active strategies.
-    Returns a list of entry signals that match current Polygon data.
-    """
-    signals = await scan_and_signal(user_id=current_user.id, db=db)
-    return {"signals": signals, "count": len(signals)}
+    """Manually trigger a scan and save signals for all active strategies."""
+    new_count = await scan_and_save_signals(db)
+    return {"saved": new_count, "market_open": _is_market_open()}
+
+
+@router.get("/signals")
+def get_signals(
+    days: int = Query(7, ge=1, le=90),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return recent signals (PaperTrades) from this user's custom strategies."""
+    since = (date.today() - timedelta(days=days - 1)).isoformat()
+    prefix = f"custom:{current_user.id}:"
+
+    rows = (
+        db.query(PaperTrade)
+        .filter(
+            PaperTrade.strategy_id.like(f"{prefix}%"),
+            PaperTrade.trade_date >= since,
+        )
+        .order_by(PaperTrade.created_at.desc())
+        .limit(200)
+        .all()
+    )
+
+    return [
+        {
+            "id":            r.id,
+            "strategy_name": r.strategy_name,
+            "ticker":        r.ticker,
+            "trade_date":    r.trade_date,
+            "entry_time_et": r.entry_time_et,
+            "entry_price":   r.entry_price,
+            "tp_price":      r.tp_price,
+            "sl_price":      r.sl_price,
+            "exit_price":    r.exit_price,
+            "return_pct":    r.return_pct,
+            "status":        r.status,
+            "exit_reason":   r.exit_reason,
+            "catalyst":      r.catalyst,
+            "rvol":          r.rvol,
+        }
+        for r in rows
+    ]

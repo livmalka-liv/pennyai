@@ -31,6 +31,24 @@ def start_scheduler():
         finally:
             db.close()
 
+    # Custom strategy scanner — every 5 min (runs only when market is open)
+    def sync_custom_scan():
+        from app.core.multi_strategy_runner import scan_and_save_signals
+        db = SessionLocal()
+        try:
+            asyncio.create_task(scan_and_save_signals(db))
+        finally:
+            db.close()
+
+    scheduler.add_job(
+        sync_custom_scan,
+        "interval",
+        minutes=5,
+        id="custom_strategy_scan",
+        name="Custom strategy live scanner",
+        replace_existing=True,
+    )
+
     # Close open trades at 23:05 Israel (after US market close)
     scheduler.add_job(
         sync_close_eod,
