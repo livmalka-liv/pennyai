@@ -12,7 +12,6 @@ from app.core.multi_strategy_runner import (
     activate_strategy,
     deactivate_strategy,
     get_active_strategies,
-    scan_and_signal,
     scan_and_save_signals,
     _is_market_open,
 )
@@ -70,8 +69,8 @@ async def scan(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Manually trigger a scan and save signals for all active strategies."""
-    new_count = await scan_and_save_signals(db)
+    """Manually trigger a scan and save signals for the current user's active strategies."""
+    new_count = await scan_and_save_signals(db, user_id=current_user.id)
     return {"saved": new_count, "market_open": _is_market_open()}
 
 
@@ -107,9 +106,11 @@ def get_signals(
             "tp_price":      r.tp_price,
             "sl_price":      r.sl_price,
             "exit_price":    r.exit_price,
-            "return_pct":    r.return_pct,
-            "status":        r.status,
+            "exit_time":     r.exit_time,
             "exit_reason":   r.exit_reason,
+            "return_pct":    r.return_pct,
+            "dollars_gain":  r.dollars_gain,
+            "status":        r.status,
             "catalyst":      r.catalyst,
             "rvol":          r.rvol,
         }

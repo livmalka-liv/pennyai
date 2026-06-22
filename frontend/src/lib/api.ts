@@ -145,9 +145,11 @@ export interface SignalRow {
   tp_price: number | null;
   sl_price: number | null;
   exit_price: number | null;
-  return_pct: number | null;
-  status: "open" | "win" | "loss" | "flat";
+  exit_time: string | null;
   exit_reason: string | null;
+  return_pct: number | null;
+  dollars_gain: number | null;
+  status: "open" | "win" | "loss" | "flat";
   catalyst: string | null;
   rvol: number | null;
 }

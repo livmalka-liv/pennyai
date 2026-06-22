@@ -30,22 +30,22 @@ def _is_market_open() -> bool:
     return open_total <= now_et_total < close_total
 
 
-async def scan_and_save_signals(db: Session) -> int:
+async def scan_and_save_signals(db: Session, user_id: str | None = None) -> int:
     """
-    Scheduled job: scan all users' active custom strategies, save new signals as PaperTrades.
+    Scan active custom strategies and save new signals as PaperTrades.
+    If user_id is given, scans only that user; otherwise scans all users (scheduler job).
     Returns the number of new signals saved.
     """
     if not _is_market_open():
         logger.debug("scan_and_save_signals: market closed, skipping")
         return 0
 
-    # Collect all unique user_ids with active custom strategies
-    rows = (
-        db.query(StrategyTracker.user_id)
-        .filter(StrategyTracker.is_active == True)  # noqa: E712
-        .distinct()
-        .all()
+    q = db.query(StrategyTracker.user_id).filter(
+        StrategyTracker.is_active == True  # noqa: E712
     )
+    if user_id:
+        q = q.filter(StrategyTracker.user_id == user_id)
+    rows = q.distinct().all()
     if not rows:
         return 0
 
@@ -59,10 +59,16 @@ async def scan_and_save_signals(db: Session) -> int:
         if not user_id:
             continue
         try:
-            signals = await scan_and_signal(user_id, db)
+            signals, catalyst_days = await scan_and_signal(user_id, db)
         except Exception as exc:
             logger.warning(f"scan_and_save_signals: scan failed for {user_id}: {exc}")
             continue
+
+        # Check TP/SL for already-open signals using this scan's market prices
+        try:
+            await _check_tp_sl(user_id, catalyst_days, db)
+        except Exception as exc:
+            logger.warning(f"scan_and_save_signals: TP/SL check failed for {user_id}: {exc}")
 
         for sig in signals:
             # Deduplicate: skip if same strategy+ticker already open today
@@ -221,7 +227,9 @@ def _get_ibkr_gateway_url(user_id: str, db: Session) -> str | None:
         return None
 
 
-async def scan_and_signal(user_id: str, db: Session) -> list[dict]:
+async def scan_and_signal(
+    user_id: str, db: Session
+) -> tuple[list[dict], list[CatalystDay]]:
     """
     Main scanner: for each active strategy, fetch the latest market data
     and check whether entry conditions are met.
@@ -231,8 +239,7 @@ async def scan_and_signal(user_id: str, db: Session) -> list[dict]:
       2. Polygon.io (15-min delayed) — fallback when IBKR unavailable
       3. Mock data — fallback when Polygon key is missing or both fail
 
-    Returns a list of signal dicts:
-        {strategy_name, ticker, entry_price, catalyst_type, rvol, trade_date}
+    Returns (signals, catalyst_days) so the caller can reuse prices for TP/SL checks.
     """
     from app.core.config import get_settings
     from app.core.backtest_engine import _apply_filters, _candles_to_df, _detect_entry_signal
@@ -241,7 +248,7 @@ async def scan_and_signal(user_id: str, db: Session) -> list[dict]:
     active = get_active_strategies(user_id, db)
     if not active:
         logger.info(f"No active strategies for user {user_id}")
-        return []
+        return [], []
 
     settings = get_settings()
     catalyst_days: list[CatalystDay] = []
@@ -276,7 +283,7 @@ async def scan_and_signal(user_id: str, db: Session) -> list[dict]:
                     logger.warning(f"scan_and_signal: could not fetch today's Polygon movers: {exc}")
         except Exception as exc:
             logger.error(f"scan_and_signal: failed to fetch catalyst days: {exc}")
-            return []
+            return [], []
 
     signals: list[dict] = []
 
@@ -323,4 +330,99 @@ async def scan_and_signal(user_id: str, db: Session) -> list[dict]:
         f"scan_and_signal: {len(signals)} signals across "
         f"{len(active)} active strategies for user {user_id}"
     )
-    return signals
+    return signals, catalyst_days
+
+
+async def _check_tp_sl(user_id: str, catalyst_days: list[CatalystDay], db: Session) -> int:
+    """
+    Check all open signals for this user against the latest candle prices.
+    Closes signals that have hit TP (win) or SL (loss).
+    Returns count of newly closed signals.
+    """
+    today = date.today().isoformat()
+    prefix = f"custom:{user_id}:"
+
+    open_trades = (
+        db.query(PaperTrade)
+        .filter(
+            PaperTrade.strategy_id.like(f"{prefix}%"),
+            PaperTrade.trade_date == today,
+            PaperTrade.status == "open",
+        )
+        .all()
+    )
+    if not open_trades:
+        return 0
+
+    # Latest close price for each ticker in today's market data
+    latest_price: dict[str, float] = {
+        day.ticker: day.candles_1m[-1].close
+        for day in catalyst_days
+        if day.candles_1m
+    }
+
+    now_utc = datetime.now(timezone.utc)
+    exit_time_et = f"{(now_utc.hour + ET_UTC_OFFSET) % 24:02d}:{now_utc.minute:02d}"
+    closed = 0
+
+    for trade in open_trades:
+        price = latest_price.get(trade.ticker)
+        if price is None:
+            continue
+
+        if trade.tp_price and price >= trade.tp_price:
+            trade.exit_price = trade.tp_price
+            trade.status = "win"
+            trade.exit_reason = "take_profit"
+        elif trade.sl_price and price <= trade.sl_price:
+            trade.exit_price = trade.sl_price
+            trade.status = "loss"
+            trade.exit_reason = "stop_loss"
+        else:
+            continue
+
+        trade.exit_time = exit_time_et
+        trade.return_pct = round(
+            (trade.exit_price - trade.entry_price) / trade.entry_price * 100, 2
+        )
+        trade.dollars_gain = round(
+            (trade.exit_price - trade.entry_price) / trade.entry_price * POSITION_DOLLARS, 2
+        )
+        closed += 1
+
+    if closed:
+        db.commit()
+        logger.info(f"_check_tp_sl: closed {closed} signals for user {user_id}")
+    return closed
+
+
+async def eod_close_custom_signals(db: Session) -> int:
+    """
+    EOD job: close all remaining open custom signals as flat.
+    Called by scheduler at 23:05 Israel time (after US market close).
+    """
+    today = date.today().isoformat()
+    now_utc = datetime.now(timezone.utc)
+    exit_time_et = f"{(now_utc.hour + ET_UTC_OFFSET) % 24:02d}:{now_utc.minute:02d}"
+
+    open_trades = (
+        db.query(PaperTrade)
+        .filter(
+            PaperTrade.strategy_id.like("custom:%"),
+            PaperTrade.trade_date == today,
+            PaperTrade.status == "open",
+        )
+        .all()
+    )
+
+    for trade in open_trades:
+        trade.status = "flat"
+        trade.exit_reason = "eod_close"
+        trade.exit_time = exit_time_et
+        trade.return_pct = 0.0
+        trade.dollars_gain = 0.0
+
+    if open_trades:
+        db.commit()
+        logger.info(f"eod_close_custom_signals: EOD-closed {len(open_trades)} signals")
+    return len(open_trades)

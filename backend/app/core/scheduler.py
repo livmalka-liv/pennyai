@@ -23,6 +23,12 @@ def start_scheduler():
 
     def sync_close_eod():
         asyncio.create_task(close_eod_trades())
+        from app.core.multi_strategy_runner import eod_close_custom_signals
+        db = SessionLocal()
+        try:
+            asyncio.create_task(eod_close_custom_signals(db))
+        finally:
+            db.close()
 
     def sync_optimize():
         db = SessionLocal()
