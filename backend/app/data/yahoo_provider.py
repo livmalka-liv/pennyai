@@ -2,9 +2,10 @@
 Yahoo Finance provider — today's top gainers + 1-minute candles.
 Free, no API key.
 
-Uses a fixed watchlist of known volatile penny stocks (AMC, GME, FFIE, etc.).
-Batch-downloads daily OHLCV via yfinance, filters for big movers, then
-fetches 1-minute candles for each via the Yahoo chart API.
+Uses a fixed watchlist of known volatile penny stocks.
+Fetches 5-day daily OHLCV via the Yahoo chart API (same endpoint that
+works for 1-minute candles) to compute % change, then filters for movers.
+All requests are parallel httpx calls — no yfinance library needed here.
 """
 
 import asyncio
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 _CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
 
 _HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; PennyAI/1.0)",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "application/json",
 }
 
@@ -28,15 +29,16 @@ _MAX_PRICE   = 20.0
 _MIN_PRICE   = 0.30
 _MIN_VOLUME  = 100_000
 _MAX_TICKERS = 20
-_MIN_CHANGE  = 3.0   # minimum % gain to be considered a mover
+_MIN_CHANGE  = 3.0   # minimum % gain to qualify as a mover
 
-# Known volatile penny stocks — we scan these every cycle
+# Known volatile penny stocks — scanned every cycle
 LIVE_WATCHLIST = [
-    "AMC", "GME", "BBBY", "CLOV", "FFIE", "MULN", "ATER", "PROG",
-    "MARA", "RIOT", "SNDL", "EXPR", "KOSS", "BB", "NOK", "WISH",
-    "CTRM", "MVIS", "GNUS", "ZOM", "IDEX", "NKLA", "TLRY", "ACB",
-    "CGC", "HEXO", "ASTS", "HIMS", "SPCE", "PRTY", "NLST",
-    "MOXC", "MXCT", "OBLG", "AABB", "BFRI", "PHUN",
+    "AMC", "GME", "CLOV", "FFIE", "MULN", "ATER", "PROG",
+    "MARA", "RIOT", "EXPR", "MVIS", "GNUS", "ZOM", "IDEX", "NKLA",
+    "TLRY", "ACB", "CGC", "ASTS", "HIMS", "SPCE", "NLST",
+    "MOXC", "MXCT", "OBLG", "BFRI", "PHUN", "AABB",
+    "CTRM", "NAKD", "KOSS", "SNDL", "BB", "NOK", "BBBY",
+    "WISH", "HEXO", "PRTY",
 ]
 
 
@@ -50,101 +52,90 @@ def _is_premarket() -> bool:
     return 4 <= h < 9 or (h == 9 and datetime.now(timezone.utc).minute < 30)
 
 
-def _get_watchlist_movers_sync() -> list[dict]:
+async def _fetch_daily_change(client: httpx.AsyncClient, ticker: str) -> dict | None:
     """
-    Batch-download 5 days of daily OHLCV for LIVE_WATCHLIST via yfinance,
-    compute % change from previous close, return tickers that moved >= MIN_CHANGE.
-    Runs in a thread (blocking I/O).
+    Fetch 5 days of daily data for a single ticker via the Yahoo chart API.
+    Returns a dict with price, volume, change_pct — or None if not a mover.
     """
     try:
-        import yfinance as yf
-    except ImportError:
-        logger.warning("yfinance not installed — no watchlist movers")
-        return []
+        r = await client.get(
+            _CHART_URL.format(ticker=ticker),
+            params={"interval": "1d", "range": "5d"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        raw = r.json()
 
-    raw = yf.download(
-        tickers=" ".join(LIVE_WATCHLIST),
-        period="5d",
-        interval="1d",
-        auto_adjust=True,
-        progress=False,
-        threads=True,
-    )
+        result = raw.get("chart", {}).get("result", [])
+        if not result:
+            return None
 
-    if raw is None or raw.empty:
-        logger.warning("yfinance watchlist download returned empty DataFrame")
-        return []
+        quote = result[0].get("indicators", {}).get("quote", [{}])[0]
+        closes  = [c for c in quote.get("close",  []) if c is not None]
+        volumes = [v for v in quote.get("volume", []) if v is not None]
 
-    try:
-        closes  = raw["Close"]
-        volumes = raw["Volume"]
-    except KeyError:
-        logger.warning("yfinance DataFrame missing Close/Volume columns")
-        return []
+        if len(closes) < 2:
+            return None
 
-    movers: list[dict] = []
-    for ticker in LIVE_WATCHLIST:
-        try:
-            if ticker not in closes.columns:
-                continue
+        curr = float(closes[-1])
+        prev = float(closes[-2])
 
-            close_s = closes[ticker].dropna()
-            vol_s   = volumes[ticker].dropna() if ticker in volumes.columns else close_s.iloc[:0]
+        if curr <= 0 or prev <= 0:
+            return None
 
-            if len(close_s) < 2:
-                continue
+        chng_pct = (curr - prev) / prev * 100
 
-            curr = float(close_s.iloc[-1])
-            prev = float(close_s.iloc[-2])
+        volume  = int(volumes[-1])                            if volumes          else 0
+        avg_vol = int(sum(volumes) / len(volumes))            if len(volumes) > 1 else max(volume, 1)
 
-            if curr <= 0 or prev <= 0:
-                continue
-            if curr < _MIN_PRICE or curr > _MAX_PRICE:
-                continue
+        return {
+            "ticker":       ticker,
+            "price":        curr,
+            "volume":       volume,
+            "change_pct":   round(chng_pct, 2),
+            "open":         curr,
+            "float_shares": None,
+            "avg_volume":   max(avg_vol, 1),
+        }
 
-            chng_pct = (curr - prev) / prev * 100
-            if chng_pct < _MIN_CHANGE:
-                continue
-
-            volume  = int(vol_s.iloc[-1])        if len(vol_s) > 0 else 0
-            avg_vol = int(vol_s.mean())           if len(vol_s) > 1 else max(volume, 1)
-
-            if volume < _MIN_VOLUME:
-                continue
-
-            movers.append({
-                "ticker":       ticker,
-                "price":        curr,
-                "volume":       volume,
-                "change_pct":   round(chng_pct, 2),
-                "open":         curr,
-                "float_shares": None,
-                "avg_volume":   max(avg_vol, 1),
-            })
-        except Exception:
-            continue
-
-    movers.sort(key=lambda x: x["change_pct"], reverse=True)
-    logger.info(f"yfinance watchlist: {len(movers)} movers ≥{_MIN_CHANGE}% today")
-    return movers[:_MAX_TICKERS]
+    except Exception:
+        return None
 
 
 async def get_todays_movers() -> list[CatalystDay]:
     """
-    Fetch today's movers from the watchlist, then get 1-minute candles for each.
+    Fetch today's movers from the watchlist then get 1-minute candles for each.
     Returns CatalystDay objects ready for strategy evaluation.
     """
-    tickers_info = await asyncio.to_thread(_get_watchlist_movers_sync)
+    async with httpx.AsyncClient(headers=_HEADERS, timeout=15) as client:
+        # Step 1 — parallel daily-change fetch for all watchlist tickers
+        tasks   = [_fetch_daily_change(client, t) for t in LIVE_WATCHLIST]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    if not tickers_info:
-        logger.info("yahoo_provider: no movers in watchlist today")
-        return []
+        movers: list[dict] = []
+        for info in results:
+            if not isinstance(info, dict):
+                continue
+            if info["price"] < _MIN_PRICE or info["price"] > _MAX_PRICE:
+                continue
+            if info["change_pct"] < _MIN_CHANGE:
+                continue
+            if info["volume"] < _MIN_VOLUME:
+                continue
+            movers.append(info)
 
-    logger.info(f"yahoo_provider: {len(tickers_info)} movers — fetching 1m candles")
-    days: list[CatalystDay] = []
+        movers.sort(key=lambda x: x["change_pct"], reverse=True)
+        movers = movers[:_MAX_TICKERS]
 
-    async with httpx.AsyncClient(headers=_HEADERS, timeout=12) as client:
-        for t in tickers_info:
+        if not movers:
+            logger.info("yahoo_provider: no movers in watchlist today")
+            return []
+
+        logger.info(f"yahoo_provider: {len(movers)} movers — fetching 1m candles")
+
+        # Step 2 — 1-minute candles for each mover
+        days: list[CatalystDay] = []
+        for t in movers:
             candles = await _fetch_candles(client, t["ticker"])
             if not candles:
                 continue
@@ -174,6 +165,7 @@ async def _fetch_candles(client: httpx.AsyncClient, ticker: str) -> list[CandleD
         r = await client.get(
             _CHART_URL.format(ticker=ticker),
             params={"interval": "1m", "range": "1d", "includePrePost": "true"},
+            timeout=10,
         )
         r.raise_for_status()
         raw = r.json()
@@ -185,10 +177,10 @@ async def _fetch_candles(client: httpx.AsyncClient, ticker: str) -> list[CandleD
         res     = result[0]
         ts_list = res.get("timestamp", [])
         quotes  = res.get("indicators", {}).get("quote", [{}])[0]
-        opens   = quotes.get("open", [])
-        highs   = quotes.get("high", [])
-        lows    = quotes.get("low", [])
-        closes  = quotes.get("close", [])
+        opens   = quotes.get("open",   [])
+        highs   = quotes.get("high",   [])
+        lows    = quotes.get("low",    [])
+        closes  = quotes.get("close",  [])
         vols    = quotes.get("volume", [])
 
         candles: list[CandleData] = []
