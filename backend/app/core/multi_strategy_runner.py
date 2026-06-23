@@ -335,9 +335,9 @@ async def _refresh_price_cache_only() -> None:
 
 async def evaluate_on_cached_data(db: Session) -> int:
     """
-    Evaluate all active strategies against _latest_catalyst_days WITHOUT
-    fetching new data.  Called every second so setups are caught immediately
-    after data is refreshed.  Data refresh happens separately every ~5 seconds.
+    Evaluate ALL active strategies (all users) against shared cached data in parallel.
+    No network calls — called every second for instant setup detection.
+    Data is refreshed separately every ~5 seconds.
     """
     global _latest_catalyst_days
     if not _latest_catalyst_days:
@@ -358,21 +358,31 @@ async def evaluate_on_cached_data(db: Session) -> int:
         if t.user_id:
             by_user[t.user_id].append(t)
 
-    new_signals = 0
-    new_signal_records: list[tuple[str, PaperTrade]] = []
+    uid_list = list(by_user.keys())
 
-    for uid, user_trackers in by_user.items():
-        try:
-            signals, _ = await _fetch_and_signal(
-                uid, user_trackers,
+    # All users evaluated simultaneously on the same cached snapshot
+    gather_results = await asyncio.gather(
+        *[
+            _fetch_and_signal(
+                uid, by_user[uid],
                 catalyst_days_override=_latest_catalyst_days,
                 db=db,
                 entry_time_et=entry_time_et,
                 entry_time_il=entry_time_il,
             )
-        except Exception as exc:
-            logger.debug(f"evaluate_on_cached_data: {uid}: {exc}")
+            for uid in uid_list
+        ],
+        return_exceptions=True,
+    )
+
+    new_signals = 0
+    new_signal_records: list[tuple[str, PaperTrade]] = []
+
+    for uid, result in zip(uid_list, gather_results):
+        if isinstance(result, Exception):
+            logger.debug(f"evaluate_on_cached_data: {uid}: {result}")
             continue
+        signals, _ = result
 
         for sig in signals:
             exists = db.query(PaperTrade).filter(
@@ -420,7 +430,7 @@ async def evaluate_on_cached_data(db: Session) -> int:
             await _auto_execute_new_signals(new_signal_records, db)
         except Exception:
             pass
-        logger.info(f"evaluate_on_cached_data: {new_signals} new signal(s)")
+        logger.info(f"evaluate_on_cached_data: {new_signals} new signal(s) across {len(uid_list)} users")
 
     return new_signals
 
@@ -463,21 +473,34 @@ async def scan_and_save_signals(db: Session, user_id: Optional[str] = None, forc
         if t.user_id:
             by_user[t.user_id].append(t)
 
+    uid_list = list(by_user.keys())
+
+    # All users evaluated in parallel — each gets their own IBKR data if connected,
+    # otherwise falls back to the shared Yahoo snapshot already in _latest_catalyst_days.
+    gather_results = await asyncio.gather(
+        *[
+            _fetch_and_signal(
+                uid, by_user[uid],
+                catalyst_days_override=None,  # each user checks IBKR first
+                db=db,
+                entry_time_et=entry_time_et,
+                entry_time_il=entry_time_il,
+            )
+            for uid in uid_list
+        ],
+        return_exceptions=True,
+    )
+
     new_signals = 0
-    # Track (user_id, PaperTrade) pairs for auto-execute after commit
     new_signal_records: list[tuple[str, PaperTrade]] = []
 
-    for uid, user_trackers in by_user.items():
-        try:
-            signals, catalyst_days = await _fetch_and_signal(
-                uid, user_trackers, catalyst_days_override=None, db=db,
-                entry_time_et=entry_time_et, entry_time_il=entry_time_il
-            )
-        except Exception as exc:
-            logger.warning(f"scan_and_save_signals: failed for user {uid}: {exc}")
+    for uid, result in zip(uid_list, gather_results):
+        if isinstance(result, Exception):
+            logger.warning(f"scan_and_save_signals: failed for user {uid}: {result}")
             continue
+        signals, catalyst_days = result
 
-        # Check TP/SL on already-open signals using fresh prices
+        # Check TP/SL with fresh prices for this user
         try:
             await _check_tp_sl_with_days(uid, catalyst_days, db, entry_time_et)
         except Exception as exc:
