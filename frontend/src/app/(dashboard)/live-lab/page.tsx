@@ -7,7 +7,7 @@ import {
   Activity, Play, Square, RefreshCw, TrendingUp, TrendingDown,
   Clock, Target, Zap, BarChart2, Award, AlertTriangle,
   ChevronRight, Brain, Lock, Radio, Sun, Sunset,
-  Moon, DollarSign, CheckCircle, XCircle, MinusCircle,
+  Moon, CheckCircle, XCircle, MinusCircle,
   Settings, X, Save,
 } from "lucide-react";
 import { cn, formatPercent, formatCurrency } from "@/lib/utils";
@@ -54,108 +54,6 @@ interface StrategyTracker {
   startedDaysAgo: number;
 }
 
-interface HourBucket {
-  hour: string;       // "11:00", "12:00" etc Israel
-  label: string;
-  wins: number;
-  losses: number;
-  winRate: number;
-  avgReturn: number;
-  session: SessionType;
-}
-
-interface PriceBucket {
-  range: string;
-  wins: number;
-  losses: number;
-  winRate: number;
-}
-
-// ─── Mock Data ────────────────────────────────────────────────────────────────
-
-const MOCK_STRATEGIES: StrategyTracker[] = [
-  { id: "gap-and-go",      name: "Gap & Go",            active: true,  totalSignals: 47, wins: 22, losses: 25, totalPnl: 340,  startedDaysAgo: 21 },
-  { id: "vwap-reclaim",    name: "VWAP Reclaim",        active: true,  totalSignals: 39, wins: 21, losses: 18, totalPnl: 520,  startedDaysAgo: 21 },
-  { id: "bull-flag",       name: "Bull Flag Breakout",  active: true,  totalSignals: 31, wins: 18, losses: 13, totalPnl: 710,  startedDaysAgo: 21 },
-  { id: "halt-resume",     name: "Halt & Resume",       active: false, totalSignals: 12, wins:  7, losses:  5, totalPnl: 280,  startedDaysAgo: 14 },
-  { id: "first-green-day", name: "First Green Day",     active: false, totalSignals:  8, wins:  5, losses:  3, totalPnl: 190,  startedDaysAgo: 14 },
-  { id: "red-to-green",    name: "Red to Green",        active: true,  totalSignals: 22, wins: 12, losses: 10, totalPnl: 140,  startedDaysAgo: 7  },
-];
-
-const MOCK_SIGNALS: Signal[] = [
-  {
-    id: "s1", ticker: "TNXP", strategyName: "Bull Flag Breakout", strategyId: "bull-flag",
-    entryTime: "16:47", entryTimeET: "09:47",
-    entryPrice: 2.34, currentPrice: 2.51, tpPrice: 2.81, slPrice: 2.17,
-    tpPct: 20, slPct: -7, status: "open", session: "regular",
-    catalyst: "FDA", rvol: 8.3, float: 5.2,
-    holdMinutes: 23, exitReason: "open",
-  },
-  {
-    id: "s2", ticker: "MULN", strategyName: "VWAP Reclaim", strategyId: "vwap-reclaim",
-    entryTime: "16:23", entryTimeET: "09:23", exitTime: "17:01",
-    entryPrice: 1.12, exitPrice: 1.29, tpPrice: 1.30, slPrice: 1.04,
-    tpPct: 15, slPct: -5, returnPct: 15.2, dollarsGain: 144, holdMinutes: 38,
-    status: "win", session: "regular", catalyst: "PR", rvol: 6.1, float: 8.2,
-    exitReason: "take_profit",
-  },
-  {
-    id: "s3", ticker: "GOVX", strategyName: "Gap & Go", strategyId: "gap-and-go",
-    entryTime: "15:52", entryTimeET: "08:52",
-    entryPrice: 3.88, exitPrice: 3.61, tpPrice: 4.66, slPrice: 3.61,
-    tpPct: 20, slPct: -7, returnPct: -6.9, dollarsGain: -66, holdMinutes: 14,
-    status: "loss", session: "premarket", catalyst: "Earnings", rvol: 12.4, float: 3.1,
-    exitReason: "stop_loss",
-  },
-  {
-    id: "s4", ticker: "PROG", strategyName: "Red to Green", strategyId: "red-to-green",
-    entryTime: "19:14", entryTimeET: "12:14", exitTime: "19:52",
-    entryPrice: 1.67, exitPrice: 1.92, tpPrice: 1.92, slPrice: 1.58,
-    tpPct: 15, slPct: -5, returnPct: 14.9, dollarsGain: 142, holdMinutes: 38,
-    status: "win", session: "regular", catalyst: "PR", rvol: 4.7, float: 14.3,
-    exitReason: "take_profit",
-  },
-  {
-    id: "s5", ticker: "CNTX", strategyName: "VWAP Reclaim", strategyId: "vwap-reclaim",
-    entryTime: "18:03", entryTimeET: "11:03", exitTime: "18:41",
-    entryPrice: 0.87, exitPrice: 0.81, tpPrice: 1.00, slPrice: 0.82,
-    tpPct: 15, slPct: -5, returnPct: -6.8, dollarsGain: -65, holdMinutes: 38,
-    status: "loss", session: "regular", catalyst: "PR", rvol: 3.2, float: 22.0,
-    exitReason: "stop_loss",
-  },
-  {
-    id: "s6", ticker: "OCGN", strategyName: "Bull Flag Breakout", strategyId: "bull-flag",
-    entryTime: "13:41", entryTimeET: "06:41",
-    entryPrice: 4.12, exitPrice: 4.94, tpPrice: 4.94, slPrice: 3.83,
-    tpPct: 20, slPct: -7, returnPct: 19.9, dollarsGain: 189, holdMinutes: 22,
-    status: "win", session: "premarket", catalyst: "FDA", rvol: 18.2, float: 2.8,
-    exitReason: "take_profit",
-  },
-];
-
-const HOUR_BUCKETS: HourBucket[] = [
-  { hour: "11:00", label: "11-12", wins: 8,  losses: 12, winRate: 40, avgReturn: -1.2, session: "premarket"  },
-  { hour: "12:00", label: "12-13", wins: 11, losses: 9,  winRate: 55, avgReturn:  1.8, session: "premarket"  },
-  { hour: "13:00", label: "13-14", wins: 14, losses: 8,  winRate: 64, avgReturn:  3.1, session: "premarket"  },
-  { hour: "14:00", label: "14-15", wins: 13, losses: 9,  winRate: 59, avgReturn:  2.4, session: "premarket"  },
-  { hour: "15:00", label: "15-16", wins: 12, losses: 8,  winRate: 60, avgReturn:  2.7, session: "premarket"  },
-  { hour: "16:00", label: "16-17", wins: 18, losses: 10, winRate: 64, avgReturn:  4.2, session: "regular"    },
-  { hour: "17:00", label: "17-18", wins: 22, losses: 11, winRate: 67, avgReturn:  5.1, session: "regular"    },
-  { hour: "18:00", label: "18-19", wins: 19, losses: 12, winRate: 61, avgReturn:  3.8, session: "regular"    },
-  { hour: "19:00", label: "19-20", wins: 14, losses: 10, winRate: 58, avgReturn:  2.9, session: "regular"    },
-  { hour: "20:00", label: "20-21", wins: 10, losses: 11, winRate: 48, avgReturn:  0.4, session: "regular"    },
-  { hour: "21:00", label: "21-22", wins:  8, losses: 14, winRate: 36, avgReturn: -2.1, session: "regular"    },
-  { hour: "22:00", label: "22-23", wins:  6, losses: 11, winRate: 35, avgReturn: -2.8, session: "afterhours" },
-];
-
-const PRICE_BUCKETS: PriceBucket[] = [
-  { range: "$0.5-1",  wins: 9,  losses: 17, winRate: 35 },
-  { range: "$1-3",    wins: 34, losses: 21, winRate: 62 },
-  { range: "$3-7",    wins: 28, losses: 17, winRate: 62 },
-  { range: "$7-15",   wins: 14, losses: 12, winRate: 54 },
-  { range: "$15+",    wins:  8, losses: 15, winRate: 35 },
-];
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const sessionLabel = (s: SessionType) =>
@@ -167,15 +65,12 @@ const sessionColor = (s: SessionType) =>
 const sessionBg = (s: SessionType) =>
   s === "premarket" ? "bg-[#F59E0B]/10 border-[#F59E0B]/25" : s === "afterhours" ? "bg-[#8B5CF6]/10 border-[#8B5CF6]/25" : "bg-[#10B981]/10 border-[#10B981]/25";
 
-const sessionIcon = (s: SessionType) =>
-  s === "premarket" ? Sun : s === "afterhours" ? Moon : Sunset;
-
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function LiveLabPage() {
   const [isRunning, setIsRunning] = useState(true);
-  const [strategies, setStrategies] = useState<StrategyTracker[]>(MOCK_STRATEGIES);
-  const [signals, setSignals] = useState<Signal[]>(MOCK_SIGNALS);
+  const [strategies, setStrategies] = useState<StrategyTracker[]>([]);
+  const [signals, setSignals] = useState<Signal[]>([]);
   const [lastScan, setLastScan] = useState("—");
   const [scanning, setScanning] = useState(false);
   const [activeTab, setActiveTab] = useState<"signals" | "heatmap">("signals");
@@ -296,7 +191,7 @@ export default function LiveLabPage() {
   const totalTrades = strategies.filter(s => s.active).reduce((sum, s) => sum + s.totalSignals, 0);
   const totalWins = strategies.filter(s => s.active).reduce((sum, s) => sum + s.wins, 0);
   const overallWr = totalTrades > 0 ? (totalWins / totalTrades * 100) : 0;
-  const daysOfData = 21;
+  const daysOfData = 0;
   const testingGoalDays = parseInt(scanSettings.testingDays ?? "90");
   const testingProgress = Math.min(100, (daysOfData / testingGoalDays) * 100);
   const coachUnlocked = daysOfData >= testingGoalDays;
@@ -517,69 +412,10 @@ export default function LiveLabPage() {
             ))}
 
             {activeTab === "heatmap" && (
-              <div className="space-y-4">
-                {/* Hour heatmap */}
-                <div className="rounded-xl border border-[#1E293B] bg-[#0F1520] p-4">
-                  <p className="text-xs font-semibold text-[#F8FAFC] mb-3 flex items-center gap-1.5">
-                    <Clock className="h-3.5 w-3.5 text-[#6366F1]" /> ביצועים לפי שעה (שעון ישראל)
-                  </p>
-                  <div className="space-y-1.5">
-                    {HOUR_BUCKETS.map(b => {
-                      const total = b.wins + b.losses;
-                      const barW = Math.min(Math.abs(b.winRate - 50) * 2, 100);
-                      const Icon = sessionIcon(b.session);
-                      return (
-                        <div key={b.hour} className="flex items-center gap-2">
-                          <div className="flex items-center gap-1 w-14 shrink-0">
-                            <Icon className={cn("h-2.5 w-2.5 shrink-0", sessionColor(b.session))} />
-                            <span className="text-[10px] font-mono text-[#64748B]">{b.label}</span>
-                          </div>
-                          <div className="flex-1 h-5 bg-[#1E293B] rounded relative overflow-hidden">
-                            <div
-                              className={cn("h-full rounded transition-all", b.winRate >= 55 ? "bg-[#10B981]/40" : b.winRate >= 45 ? "bg-[#F59E0B]/40" : "bg-[#EF4444]/40")}
-                              style={{ width: `${b.winRate}%` }}
-                            />
-                            <span className="absolute inset-0 flex items-center px-2 text-[10px] text-[#F8FAFC] font-medium">
-                              {b.winRate}% WR · {total} עסקאות
-                            </span>
-                          </div>
-                          <span className={cn("text-[10px] font-bold tabular-nums w-10 text-right", b.avgReturn >= 0 ? "text-[#10B981]" : "text-[#EF4444]")}>
-                            {b.avgReturn >= 0 ? "+" : ""}{b.avgReturn}%
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Price bucket heatmap */}
-                <div className="rounded-xl border border-[#1E293B] bg-[#0F1520] p-4">
-                  <p className="text-xs font-semibold text-[#F8FAFC] mb-3 flex items-center gap-1.5">
-                    <DollarSign className="h-3.5 w-3.5 text-[#10B981]" /> ביצועים לפי טווח מחיר
-                  </p>
-                  <div className="space-y-2">
-                    {PRICE_BUCKETS.map(b => {
-                      const total = b.wins + b.losses;
-                      return (
-                        <div key={b.range} className="flex items-center gap-3">
-                          <span className="text-[10px] font-mono text-[#94A3B8] w-14 shrink-0">{b.range}</span>
-                          <div className="flex-1 h-6 bg-[#1E293B] rounded relative overflow-hidden">
-                            <div
-                              className={cn("h-full rounded", b.winRate >= 55 ? "bg-[#10B981]/40" : b.winRate >= 45 ? "bg-[#F59E0B]/40" : "bg-[#EF4444]/40")}
-                              style={{ width: `${b.winRate}%` }}
-                            />
-                            <span className="absolute inset-0 flex items-center px-2 text-[10px] text-[#F8FAFC] font-medium">
-                              {b.winRate}% WR &nbsp;·&nbsp; {b.wins}W/{b.losses}L
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <p className="mt-3 text-[10px] text-[#64748B]">
-                    💡 מניות בטווח $1-7 מראות תוצאות הטובות ביותר (62% WR)
-                  </p>
-                </div>
+              <div className="flex flex-col items-center justify-center py-20 text-center">
+                <BarChart2 className="h-10 w-10 text-[#1E293B] mb-4" />
+                <p className="text-sm text-[#64748B]">אין נתוני ביצועים עדיין</p>
+                <p className="text-xs text-[#475569] mt-1">מפת החום תיוצר אוטומטית לאחר צבירת עסקאות אמיתיות</p>
               </div>
             )}
           </div>
@@ -662,65 +498,15 @@ export default function LiveLabPage() {
               </div>
             </div>
 
-            {/* Best hours */}
-            <div className="rounded-xl border border-[#1E293B] bg-[#0F1520] p-3">
-              <p className="text-[10px] uppercase tracking-widest text-[#64748B] mb-2">שעות הכי טובות</p>
-              {[...HOUR_BUCKETS].sort((a, b) => b.winRate - a.winRate).slice(0, 4).map((b, i) => (
-                <div key={b.hour} className="flex items-center gap-2 mb-1.5">
-                  <span className="text-[10px] text-[#F59E0B] w-4">#{i + 1}</span>
-                  <span className="text-[10px] font-mono text-[#94A3B8] w-12">{b.label}</span>
-                  <div className="flex-1 h-1.5 bg-[#1E293B] rounded">
-                    <div className="h-1.5 bg-[#10B981] rounded" style={{ width: `${b.winRate}%` }} />
-                  </div>
-                  <span className="text-[10px] font-bold text-[#10B981] w-8 text-right">{b.winRate}%</span>
-                </div>
-              ))}
-            </div>
-
-            {/* Best price range */}
-            <div className="rounded-xl border border-[#1E293B] bg-[#0F1520] p-3">
-              <p className="text-[10px] uppercase tracking-widest text-[#64748B] mb-2">מחיר אידיאלי</p>
-              {[...PRICE_BUCKETS].sort((a, b) => b.winRate - a.winRate).slice(0, 3).map((b, i) => (
-                <div key={b.range} className="flex items-center gap-2 mb-1.5">
-                  <span className="text-[10px] text-[#F59E0B] w-4">#{i + 1}</span>
-                  <span className="text-[10px] font-mono text-[#94A3B8] w-12">{b.range}</span>
-                  <div className="flex-1 h-1.5 bg-[#1E293B] rounded">
-                    <div className="h-1.5 bg-[#6366F1] rounded" style={{ width: `${b.winRate}%` }} />
-                  </div>
-                  <span className="text-[10px] font-bold text-[#6366F1] w-8 text-right">{b.winRate}%</span>
-                </div>
-              ))}
-            </div>
-
               {/* AI Optimizer */}
             <div className="rounded-xl border border-[#F59E0B]/25 bg-[#F59E0B]/5 p-3">
               <p className="text-xs font-bold text-[#F59E0B] mb-2 flex items-center gap-1.5">
                 <Zap className="h-3.5 w-3.5" /> AI Optimizer
               </p>
-              <p className="text-[10px] text-[#94A3B8] leading-relaxed mb-2">
+              <p className="text-[10px] text-[#94A3B8] leading-relaxed">
                 כל שבוע ה-AI בודק אוטומטית אם הוספת משתנה (שעה, מחיר, rvol) מעלה את אחוז ההצלחה.
+                תוצאות יוצגו כאן לאחר צבירת נתונים אמיתיים.
               </p>
-              {/* Mock optimization discoveries */}
-              <div className="space-y-1.5">
-                {[
-                  { strategy: "Bull Flag", var: "16:30-18:30 בלבד", base: 54, improved: 67, status: "accepted" },
-                  { strategy: "VWAP", var: "rvol ≥ 7x", base: 46, improved: 58, status: "testing" },
-                ].map((opt, i) => (
-                  <div key={i} className="rounded-lg bg-[#0B0E14]/60 p-2">
-                    <div className="flex items-center justify-between mb-0.5">
-                      <span className="text-[10px] font-semibold text-[#F8FAFC]">{opt.strategy}</span>
-                      <span className={cn(
-                        "text-[8px] px-1.5 py-0.5 rounded font-bold",
-                        opt.status === "accepted" ? "bg-[#10B981]/15 text-[#10B981]" : "bg-[#F59E0B]/15 text-[#F59E0B]"
-                      )}>
-                        {opt.status === "accepted" ? "אושר ✓" : "בבדיקה"}
-                      </span>
-                    </div>
-                    <p className="text-[9px] text-[#64748B]">{opt.var}</p>
-                    <p className="text-[9px] text-[#10B981] font-medium">{opt.base}% → {opt.improved}% WR (+{opt.improved - opt.base}pp)</p>
-                  </div>
-                ))}
-              </div>
             </div>
 
           {/* AI Coach CTA */}
