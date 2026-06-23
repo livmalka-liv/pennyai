@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   FlaskConical, Zap, Trophy, Tag, RefreshCw,
   TrendingUp, TrendingDown, Activity, Lock,
-  ShoppingBag, ToggleLeft, ToggleRight, Clock,
+  ShoppingBag, ToggleLeft, ToggleRight, Clock, BarChart2, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -12,8 +12,10 @@ import {
   toggleForSale,
   activateForLiveScan,
   deactivateStrategy,
+  runTrackerBacktest,
   type StrategyStat,
 } from "@/lib/api";
+import type { BacktestResult } from "@/types";
 import { useAuth } from "@/context/AuthContext";
 
 function dollars(v: number) {
@@ -60,6 +62,44 @@ function ForSaleBadge() {
   );
 }
 
+function BacktestModal({ result, onClose }: { result: BacktestResult; onClose: () => void }) {
+  const m = result.metrics;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+      <div
+        className="relative w-full max-w-lg rounded-2xl border border-[#1E293B] bg-[#0D1117] p-6"
+        onClick={e => e.stopPropagation()}
+      >
+        <button onClick={onClose} className="absolute top-4 left-4 text-[#475569] hover:text-white">
+          <X className="h-4 w-4" />
+        </button>
+        <div className="flex items-center gap-2 mb-4">
+          <BarChart2 className="h-4 w-4 text-[#6366F1]" />
+          <h3 className="font-semibold text-sm">בקטסט על נתונים היסטוריים</h3>
+        </div>
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          {[
+            { label: "ROI כולל", value: `${m.totalRoi > 0 ? "+" : ""}${m.totalRoi.toFixed(1)}%`, color: m.totalRoi >= 0 ? "text-emerald-400" : "text-rose-400" },
+            { label: "Win Rate", value: `${m.winRate.toFixed(1)}%`, color: m.winRate >= 55 ? "text-emerald-400" : m.winRate >= 45 ? "text-yellow-400" : "text-rose-400" },
+            { label: "Profit Factor", value: m.profitFactor.toFixed(2), color: m.profitFactor >= 1.5 ? "text-emerald-400" : "text-rose-400" },
+            { label: "Max Drawdown", value: `${m.maxDrawdown.toFixed(1)}%`, color: "text-rose-400" },
+            { label: "עסקאות", value: String(m.totalTrades), color: "text-[#F8FAFC]" },
+            { label: "Sharpe", value: m.sharpeRatio.toFixed(2), color: m.sharpeRatio >= 1 ? "text-emerald-400" : "text-yellow-400" },
+          ].map(({ label, value, color }) => (
+            <div key={label} className="rounded-lg bg-[#131A26] px-3 py-2">
+              <p className="text-[10px] text-[#64748B] mb-0.5">{label}</p>
+              <p className={cn("font-bold", color)}>{value}</p>
+            </div>
+          ))}
+        </div>
+        <p className="mt-4 text-[10px] text-[#475569] text-center">
+          מבוסס על נתוני Yahoo Finance היסטוריים — מניות penny שעפו בעבר
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function StrategyCard({
   stat,
   onToggleSale,
@@ -71,6 +111,20 @@ function StrategyCard({
 }) {
   const dollarColor = stat.total_dollars >= 0 ? "text-emerald-400" : "text-rose-400";
   const DollarIcon = stat.total_dollars >= 0 ? TrendingUp : TrendingDown;
+  const [backtesting, setBacktesting] = useState(false);
+  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
+
+  async function handleBacktest() {
+    setBacktesting(true);
+    try {
+      const result = await runTrackerBacktest(stat.tracker_id);
+      setBacktestResult(result);
+    } catch {
+      // ignore
+    } finally {
+      setBacktesting(false);
+    }
+  }
 
   return (
     <div className={cn(
@@ -159,6 +213,16 @@ function StrategyCard({
           {stat.is_active ? "עצור סריקה" : "הפעל סריקה"}
         </button>
 
+        {/* Historical backtest button */}
+        <button
+          onClick={handleBacktest}
+          disabled={backtesting}
+          title="בדיקת עבר — Yahoo Finance היסטורי"
+          className="rounded-lg p-1.5 transition-all border border-[#1E293B] text-[#475569] hover:text-[#6366F1] disabled:opacity-40"
+        >
+          <BarChart2 className={cn("h-4 w-4", backtesting && "animate-pulse")} />
+        </button>
+
         {/* For-sale toggle — only shown for proven strategies */}
         {stat.is_proven && (
           <button
@@ -175,6 +239,10 @@ function StrategyCard({
           </button>
         )}
       </div>
+
+      {backtestResult && (
+        <BacktestModal result={backtestResult} onClose={() => setBacktestResult(null)} />
+      )}
     </div>
   );
 }

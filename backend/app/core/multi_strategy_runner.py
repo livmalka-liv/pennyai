@@ -26,8 +26,14 @@ ISRAEL_UTC_OFFSET = 3   # summer IDT UTC+3
 ET_UTC_OFFSET     = -4  # summer EDT UTC-4
 POSITION_DOLLARS  = 1000
 
-# In-memory price cache — refreshed on every full scan
+# In-memory price cache — refreshed on every data fetch
 _latest_prices: dict[str, float] = {}
+
+# In-memory catalyst days — refreshed every ~5s, evaluated every 1s
+_latest_catalyst_days: list[CatalystDay] = []
+
+# Last known data source ("ibkr" / "yahoo" / "mock")
+_last_data_source: str = "none"
 
 # Semaphore: at most 15 strategy evaluations running concurrently
 _SCAN_SEM: Optional[asyncio.Semaphore] = None
@@ -284,6 +290,133 @@ async def _eval_strategy(
         return signals
 
 
+# ─── Price cache refresh (no strategies needed) ───────────────────────────────
+
+async def _refresh_price_cache_only() -> None:
+    """Fetch today's movers and update _latest_prices without needing active strategies.
+    Called on every scan tick so /scan-status always shows real tracked tickers."""
+    global _latest_prices
+    from app.core.config import get_settings
+    settings = get_settings()
+
+    catalyst_days: list[CatalystDay] = []
+    try:
+        from app.data.yahoo_provider import get_todays_movers as yahoo_movers
+        catalyst_days = await yahoo_movers()
+    except Exception as exc:
+        logger.debug(f"_refresh_price_cache_only yahoo: {exc}")
+
+    if not catalyst_days and not settings.use_mock_data and settings.polygon_api_key:
+        try:
+            from app.data.polygon_provider import get_todays_movers
+            catalyst_days = get_todays_movers(settings.polygon_api_key)
+        except Exception as exc:
+            logger.debug(f"_refresh_price_cache_only polygon: {exc}")
+
+    for day in catalyst_days:
+        if day.candles_1m:
+            _latest_prices[day.ticker] = day.candles_1m[-1].close
+
+    # Update the shared catalyst days cache used by per-second evaluation
+    global _latest_catalyst_days
+    if catalyst_days:
+        _latest_catalyst_days = catalyst_days
+
+
+# ─── Per-second strategy evaluation (no network) ──────────────────────────────
+
+async def evaluate_on_cached_data(db: Session) -> int:
+    """
+    Evaluate all active strategies against _latest_catalyst_days WITHOUT
+    fetching new data.  Called every second so setups are caught immediately
+    after data is refreshed.  Data refresh happens separately every ~5 seconds.
+    """
+    global _latest_catalyst_days
+    if not _latest_catalyst_days:
+        return 0
+
+    q = db.query(StrategyTracker).filter(StrategyTracker.is_active == True)  # noqa: E712
+    trackers = q.all()
+    if not trackers:
+        return 0
+
+    entry_time_et = _et_hhmm()
+    entry_time_il = _il_hhmm()
+    today = date.today().isoformat()
+
+    from collections import defaultdict
+    by_user: dict[str, list] = defaultdict(list)
+    for t in trackers:
+        if t.user_id:
+            by_user[t.user_id].append(t)
+
+    new_signals = 0
+    new_signal_records: list[tuple[str, PaperTrade]] = []
+
+    for uid, user_trackers in by_user.items():
+        try:
+            signals, _ = await _fetch_and_signal(
+                uid, user_trackers,
+                catalyst_days_override=_latest_catalyst_days,
+                db=db,
+                entry_time_et=entry_time_et,
+                entry_time_il=entry_time_il,
+            )
+        except Exception as exc:
+            logger.debug(f"evaluate_on_cached_data: {uid}: {exc}")
+            continue
+
+        for sig in signals:
+            exists = db.query(PaperTrade).filter(
+                PaperTrade.strategy_name == sig["strategy_name"],
+                PaperTrade.ticker == sig["ticker"],
+                PaperTrade.trade_date == today,
+            ).first()
+            if exists:
+                continue
+            try:
+                actual_entry = sig["entry_price"]
+                tp_pct = sig["tp_pct"]
+                sl_pct = sig["sl_pct"]
+                raw_tp = round(actual_entry * (1 + tp_pct / 100), 4)
+                raw_sl = round(actual_entry * (1 - sl_pct / 100), 4)
+                trade = PaperTrade(
+                    id=str(uuid.uuid4()),
+                    strategy_id=f"custom:{uid}:{sig['strategy_name']}",
+                    strategy_name=sig["strategy_name"],
+                    ticker=sig["ticker"],
+                    trade_date=today,
+                    entry_time=sig["entry_time_il"],
+                    entry_time_et=sig["entry_time_et"],
+                    entry_price=actual_entry,
+                    tp_price=raw_tp,
+                    sl_price=raw_sl,
+                    status="open",
+                    session="regular" if _is_market_open() else "premarket",
+                    catalyst=sig.get("catalyst_type"),
+                    rvol=sig.get("rvol"),
+                    variant="custom",
+                )
+                db.add(trade)
+                new_signal_records.append((uid, trade))
+                new_signals += 1
+            except Exception as exc:
+                logger.debug(f"evaluate_on_cached_data build_trade: {exc}")
+
+    if new_signals:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        try:
+            await _auto_execute_new_signals(new_signal_records, db)
+        except Exception:
+            pass
+        logger.info(f"evaluate_on_cached_data: {new_signals} new signal(s)")
+
+    return new_signals
+
+
 # ─── Full scan ────────────────────────────────────────────────────────────────
 
 async def scan_and_save_signals(db: Session, user_id: Optional[str] = None, force: bool = False) -> int:
@@ -300,6 +433,9 @@ async def scan_and_save_signals(db: Session, user_id: Optional[str] = None, forc
     if not force and not _is_in_scan_window():
         logger.debug("scan_and_save_signals: outside scan window, skipping")
         return 0
+
+    # Always refresh price cache even with no active strategies (powers /scan-status)
+    await _refresh_price_cache_only()
 
     q = db.query(StrategyTracker).filter(StrategyTracker.is_active == True)  # noqa: E712
     if user_id:
@@ -446,14 +582,15 @@ async def _fetch_and_signal(
     entry_time_il: str,
 ) -> tuple[list[dict], list[CatalystDay]]:
     """Fetch market data for user, update price cache, evaluate all strategies in parallel."""
-    global _latest_prices
+    global _latest_prices, _last_data_source
     from app.core.config import get_settings
 
     settings = get_settings()
     catalyst_days: list[CatalystDay] = catalyst_days_override or []
+    data_source = "cached" if catalyst_days_override else "none"
 
     if not catalyst_days:
-        # Try IBKR
+        # Try IBKR first — real-time, highest quality
         gw = _get_ibkr_gateway_url(user_id, db)
         if gw:
             try:
@@ -461,7 +598,10 @@ async def _fetch_and_signal(
                 ibkr_days = await get_ibkr_movers(gw)
                 if ibkr_days:
                     catalyst_days = ibkr_days
+                    data_source = "ibkr"
                     logger.info(f"Using IBKR real-time data ({len(ibkr_days)} movers) for {user_id}")
+                else:
+                    logger.warning(f"IBKR returned 0 movers for {user_id} — falling back")
             except Exception as exc:
                 logger.warning(f"IBKR failed for {user_id}: {exc}")
 
@@ -471,13 +611,14 @@ async def _fetch_and_signal(
                 from app.data.polygon_provider import get_catalyst_days, get_todays_movers
                 try:
                     catalyst_days = get_catalyst_days(1, settings.polygon_api_key)
+                    data_source = "polygon"
                 except Exception as exc:
                     logger.warning(f"Polygon historical fetch failed for {user_id}: {exc}")
                 if catalyst_days:
                     try:
                         catalyst_days = get_todays_movers(settings.polygon_api_key) + catalyst_days
                     except Exception:
-                        pass  # gainers endpoint requires paid tier — use historical only
+                        pass
         except Exception as exc:
             logger.warning(f"Polygon setup failed for {user_id}: {exc}")
 
@@ -487,9 +628,9 @@ async def _fetch_and_signal(
             from app.data.yahoo_provider import get_todays_movers as yahoo_movers
             yahoo_days = await yahoo_movers()
             if yahoo_days:
-                # Prepend today's live movers; historical days serve as backfill
                 catalyst_days = yahoo_days + catalyst_days
-                logger.info(f"Yahoo Finance: {len(yahoo_days)} live movers prepended for {user_id}")
+                data_source = "yahoo" if data_source == "none" else data_source
+                logger.info(f"Yahoo Finance: {len(yahoo_days)} live movers for {user_id}")
         except Exception as exc:
             logger.warning(f"Yahoo Finance provider failed for {user_id}: {exc}")
 
@@ -497,7 +638,10 @@ async def _fetch_and_signal(
     if not catalyst_days:
         from app.data.mock_provider import generate_catalyst_days
         catalyst_days = generate_catalyst_days(lookback_years=1)
+        data_source = "mock"
         logger.info(f"Using mock data for {user_id} (no real data available)")
+
+    _last_data_source = data_source
 
     # Refresh price cache
     for day in catalyst_days:

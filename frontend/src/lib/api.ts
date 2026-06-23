@@ -202,6 +202,60 @@ export async function toggleForSale(trackerId: string): Promise<{ tracker_id: st
   return apiFetch(`/live-strategies/${trackerId}/for-sale`, { method: "PATCH" });
 }
 
+export async function runTrackerBacktest(trackerId: string): Promise<BacktestResult> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = await apiFetch<any>(`/live-strategies/${trackerId}/backtest`, { method: "POST" });
+  const m = raw.metrics;
+  const s = raw.strategy;
+  return {
+    id: raw.id,
+    status: raw.status,
+    createdAt: raw.created_at,
+    strategy: {
+      name: s.name,
+      description: s.description,
+      rules: s.rules,
+      slippage: s.slippage,
+      timeframe: s.timeframe,
+      lookbackYears: s.lookback_years,
+    },
+    metrics: {
+      totalRoi: m.total_roi,
+      winRate: m.win_rate,
+      profitFactor: m.profit_factor,
+      maxDrawdown: m.max_drawdown,
+      avgReturnPerTrade: m.avg_return_per_trade,
+      totalTrades: m.total_trades,
+      winningTrades: m.winning_trades,
+      losingTrades: m.losing_trades,
+      avgHoldingMinutes: m.avg_holding_minutes,
+      sharpeRatio: m.sharpe_ratio,
+      avgTradesPerMonth: m.avg_trades_per_month ?? 0,
+      avgOpportunitiesPerDay: m.avg_opportunities_per_day ?? 0,
+      bestTrade: m.best_trade ?? 0,
+      worstTrade: m.worst_trade ?? 0,
+      avgWin: m.avg_win ?? 0,
+      avgLoss: m.avg_loss ?? 0,
+      consecutiveWins: m.consecutive_wins ?? 0,
+      consecutiveLosses: m.consecutive_losses ?? 0,
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    equityCurve: (raw.equity_curve ?? []).map((p: any) => ({ date: p.date, equity: p.equity })),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    trades: (raw.trades ?? []).map((t: any) => ({
+      id: t.id, ticker: t.ticker, date: t.date, type: t.type ?? "Long",
+      entryPrice: t.entry_price, exitPrice: t.exit_price, returnPct: t.return_pct,
+      holdingMinutes: t.holding_minutes, volume: t.volume, float: t.float_shares,
+      exitReason: t.exit_reason ?? undefined, rvol: t.rvol ?? undefined,
+      catalyst: t.catalyst_type ?? undefined,
+    })),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    durabilityByYear: (raw.durability_by_year ?? []).map((d: any) => ({
+      period: d.period, roi: d.roi, winRate: d.win_rate, trades: d.trades, sharpe: d.sharpe,
+    })),
+  };
+}
+
 export async function clarifyStrategy(
   description: string,
   conversation: { role: "user" | "assistant"; content: string }[]
@@ -214,6 +268,33 @@ export async function clarifyStrategy(
 
 export async function getVaultStrategies(tier = "free") {
   return apiFetch<any[]>(`/strategies/vault?tier=${tier}`);
+}
+
+export interface ScanStatus {
+  market_open: boolean;
+  scan_window_active: boolean;
+  time_israel: string;
+  time_et: string;
+  market_opens_israel: string;
+  market_closes_israel: string;
+  data_source: string;
+  active_strategies: { id: string; name: string }[];
+  tracked_tickers: string[];
+  tracked_count: number;
+}
+
+export async function getScanStatus(): Promise<ScanStatus> {
+  // Use public endpoint (no auth) so status shows even before login
+  const API_BASE_RAW = (process.env.NEXT_PUBLIC_API_URL || "https://pennyai-backend-production.up.railway.app/api/v1").replace(/\/$/, "");
+  const base = API_BASE_RAW.replace(/\/api\/v1$/, "");
+  const res = await fetch(`${base}/api/v1/market-clock`);
+  if (!res.ok) throw new Error("scan status failed");
+  const data = await res.json();
+  // Merge with empty user fields
+  return {
+    ...data,
+    active_strategies: data.active_strategies ?? [],
+  };
 }
 
 export async function createCheckout(tier: string, billing: "monthly" | "yearly") {

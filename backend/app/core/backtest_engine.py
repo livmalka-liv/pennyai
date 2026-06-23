@@ -87,9 +87,10 @@ def run_backtest(strategy: StrategyConfig) -> BacktestResult:
     settings = get_settings()
 
     from app.data.mock_provider import generate_catalyst_days as gen_mock
-    if settings.use_mock_data or not settings.polygon_api_key:
-        catalyst_days = gen_mock(lookback_years=strategy.lookback_years)
-    else:
+
+    catalyst_days: list[CatalystDay] = []
+
+    if not settings.use_mock_data and settings.polygon_api_key:
         import threading
         _result: list = []
         def _fetch():
@@ -103,9 +104,23 @@ def run_backtest(strategy: StrategyConfig) -> BacktestResult:
         t.join(timeout=2)
         if _result:
             catalyst_days = _result[0]
+            logger.info(f"Polygon: {len(catalyst_days)} catalyst days")
         else:
-            logger.warning("Polygon fetch timed out — using mock data")
-            catalyst_days = gen_mock(lookback_years=strategy.lookback_years)
+            logger.warning("Polygon fetch timed out — will try Yahoo Finance")
+
+    # Yahoo Finance historical — free, real OHLCV, no API key needed
+    if not catalyst_days:
+        try:
+            from app.data.yahoo_historical_provider import get_historical_catalyst_days
+            catalyst_days = get_historical_catalyst_days(strategy.lookback_years)
+            logger.info(f"Yahoo Finance historical: {len(catalyst_days)} catalyst days")
+        except Exception as exc:
+            logger.warning(f"Yahoo Finance historical failed: {exc}")
+
+    # Fall back to synthetic mock if both real sources failed
+    if not catalyst_days:
+        logger.warning("No real data available — using synthetic mock data for backtest")
+        catalyst_days = gen_mock(lookback_years=strategy.lookback_years)
 
     # Supplement with mock if real data is sparse
     min_expected = max(int(strategy.lookback_years * 30), 5)

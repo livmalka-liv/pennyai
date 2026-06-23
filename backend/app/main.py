@@ -91,3 +91,29 @@ async def health():
         "llm": "mock" if settings.use_mock_llm else "claude",
         "live_lab": "active",
     }
+
+
+@app.get("/api/v1/market-clock")
+async def market_clock():
+    """Public endpoint — no auth. Returns scan window + market open status."""
+    from datetime import datetime, timezone
+    from app.core.multi_strategy_runner import _is_market_open, _is_in_scan_window, _latest_prices
+    try:
+        from app.core.multi_strategy_runner import _last_data_source
+    except ImportError:
+        _last_data_source = "unknown"
+
+    now_utc = datetime.now(timezone.utc)
+    il_hour = (now_utc.hour + 3) % 24
+    et_hour = (now_utc.hour - 4) % 24
+    return {
+        "market_open": _is_market_open(),
+        "scan_window_active": _is_in_scan_window(),
+        "time_israel": f"{il_hour:02d}:{now_utc.minute:02d}",
+        "time_et": f"{et_hour:02d}:{now_utc.minute:02d}",
+        "tracked_count": len(_latest_prices),
+        "tracked_tickers": sorted(_latest_prices.keys()),
+        "data_source": _last_data_source,
+        "market_opens_israel": "16:30",
+        "market_closes_israel": "23:00",
+    }

@@ -1,13 +1,15 @@
 """
 Yahoo Finance provider — today's top gainers + 1-minute candles.
-Free, no API key. Roughly 15-minute delayed data on free accounts.
+Free, no API key.
 
-Used as fallback when IBKR is not connected and Polygon gainers endpoint
-returns 403 (free-tier restriction).
+Uses a fixed watchlist of known volatile penny stocks (AMC, GME, FFIE, etc.).
+Batch-downloads daily OHLCV via yfinance, filters for big movers, then
+fetches 1-minute candles for each via the Yahoo chart API.
 """
 
+import asyncio
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 import httpx
 
@@ -15,12 +17,6 @@ from app.data.types import CandleData, CatalystDay
 
 logger = logging.getLogger(__name__)
 
-# Yahoo Finance endpoints (public, no auth)
-_SCREENER_URL = (
-    "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved"
-    "?scrIds=day_gainers&count=50&fields=symbol,regularMarketPrice,regularMarketVolume,"
-    "regularMarketChangePercent,regularMarketOpen,floatShares"
-)
 _CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
 
 _HEADERS = {
@@ -28,38 +24,131 @@ _HEADERS = {
     "Accept": "application/json",
 }
 
-# Penny-stock filter: price < $20, volume > 500K
 _MAX_PRICE   = 20.0
 _MIN_PRICE   = 0.30
-_MIN_VOLUME  = 500_000
-_MAX_TICKERS = 30   # keep it fast — evaluate the best movers only
+_MIN_VOLUME  = 100_000
+_MAX_TICKERS = 20
+_MIN_CHANGE  = 3.0   # minimum % gain to be considered a mover
+
+# Known volatile penny stocks — we scan these every cycle
+LIVE_WATCHLIST = [
+    "AMC", "GME", "BBBY", "CLOV", "FFIE", "MULN", "ATER", "PROG",
+    "MARA", "RIOT", "SNDL", "EXPR", "KOSS", "BB", "NOK", "WISH",
+    "CTRM", "MVIS", "GNUS", "ZOM", "IDEX", "NKLA", "TLRY", "ACB",
+    "CGC", "HEXO", "ASTS", "HIMS", "SPCE", "PRTY", "NLST",
+    "MOXC", "MXCT", "OBLG", "AABB", "BFRI", "PHUN",
+]
+
+
+def _current_et_hour() -> int:
+    now_utc = datetime.now(timezone.utc)
+    return (now_utc.hour - 4) % 24
+
+
+def _is_premarket() -> bool:
+    h = _current_et_hour()
+    return 4 <= h < 9 or (h == 9 and datetime.now(timezone.utc).minute < 30)
+
+
+def _get_watchlist_movers_sync() -> list[dict]:
+    """
+    Batch-download 5 days of daily OHLCV for LIVE_WATCHLIST via yfinance,
+    compute % change from previous close, return tickers that moved >= MIN_CHANGE.
+    Runs in a thread (blocking I/O).
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        logger.warning("yfinance not installed — no watchlist movers")
+        return []
+
+    raw = yf.download(
+        tickers=" ".join(LIVE_WATCHLIST),
+        period="5d",
+        interval="1d",
+        auto_adjust=True,
+        progress=False,
+        threads=True,
+    )
+
+    if raw is None or raw.empty:
+        logger.warning("yfinance watchlist download returned empty DataFrame")
+        return []
+
+    try:
+        closes  = raw["Close"]
+        volumes = raw["Volume"]
+    except KeyError:
+        logger.warning("yfinance DataFrame missing Close/Volume columns")
+        return []
+
+    movers: list[dict] = []
+    for ticker in LIVE_WATCHLIST:
+        try:
+            if ticker not in closes.columns:
+                continue
+
+            close_s = closes[ticker].dropna()
+            vol_s   = volumes[ticker].dropna() if ticker in volumes.columns else close_s.iloc[:0]
+
+            if len(close_s) < 2:
+                continue
+
+            curr = float(close_s.iloc[-1])
+            prev = float(close_s.iloc[-2])
+
+            if curr <= 0 or prev <= 0:
+                continue
+            if curr < _MIN_PRICE or curr > _MAX_PRICE:
+                continue
+
+            chng_pct = (curr - prev) / prev * 100
+            if chng_pct < _MIN_CHANGE:
+                continue
+
+            volume  = int(vol_s.iloc[-1])        if len(vol_s) > 0 else 0
+            avg_vol = int(vol_s.mean())           if len(vol_s) > 1 else max(volume, 1)
+
+            if volume < _MIN_VOLUME:
+                continue
+
+            movers.append({
+                "ticker":       ticker,
+                "price":        curr,
+                "volume":       volume,
+                "change_pct":   round(chng_pct, 2),
+                "open":         curr,
+                "float_shares": None,
+                "avg_volume":   max(avg_vol, 1),
+            })
+        except Exception:
+            continue
+
+    movers.sort(key=lambda x: x["change_pct"], reverse=True)
+    logger.info(f"yfinance watchlist: {len(movers)} movers ≥{_MIN_CHANGE}% today")
+    return movers[:_MAX_TICKERS]
 
 
 async def get_todays_movers() -> list[CatalystDay]:
     """
-    Fetch today's top-gaining penny stocks from Yahoo Finance screener,
-    then pull 1-minute candles for each.  Returns a CatalystDay list.
+    Fetch today's movers from the watchlist, then get 1-minute candles for each.
+    Returns CatalystDay objects ready for strategy evaluation.
     """
-    try:
-        tickers = await _fetch_top_gainers()
-    except Exception as exc:
-        logger.warning(f"yahoo_provider: screener failed: {exc}")
+    tickers_info = await asyncio.to_thread(_get_watchlist_movers_sync)
+
+    if not tickers_info:
+        logger.info("yahoo_provider: no movers in watchlist today")
         return []
 
-    if not tickers:
-        logger.info("yahoo_provider: screener returned 0 matching tickers")
-        return []
-
-    logger.info(f"yahoo_provider: {len(tickers)} penny-stock movers today")
+    logger.info(f"yahoo_provider: {len(tickers_info)} movers — fetching 1m candles")
     days: list[CatalystDay] = []
 
     async with httpx.AsyncClient(headers=_HEADERS, timeout=12) as client:
-        for t in tickers[:_MAX_TICKERS]:
+        for t in tickers_info:
             candles = await _fetch_candles(client, t["ticker"])
             if not candles:
                 continue
 
-            # Rough RVOL: today's volume vs 30-day average (assume 1M avg for penny stocks)
             avg_vol = max(t.get("avg_volume", 1_000_000) or 1_000_000, 1)
             rvol    = round(t["volume"] / avg_vol, 1)
 
@@ -71,7 +160,7 @@ async def get_todays_movers() -> list[CatalystDay]:
                 day_volume=t["volume"],
                 float_shares=int(t.get("float_shares") or 5_000_000),
                 rvol=max(rvol, 1.0),
-                catalyst_type="yahoo_gainer",
+                catalyst_type="premarket_gainer" if _is_premarket() else "day_gainer",
                 candles_1m=candles,
             ))
 
@@ -79,60 +168,12 @@ async def get_todays_movers() -> list[CatalystDay]:
     return days
 
 
-async def _fetch_top_gainers() -> list[dict]:
-    """Return filtered list of {ticker, price, volume, change_pct, open, float_shares}."""
-    async with httpx.AsyncClient(headers=_HEADERS, timeout=10) as client:
-        r = await client.get(_SCREENER_URL)
-        r.raise_for_status()
-        data = r.json()
-
-    quotes = (
-        data.get("finance", {})
-            .get("result", [{}])[0]
-            .get("quotes", [])
-    )
-
-    out = []
-    for q in quotes:
-        symbol = q.get("symbol", "")
-        # Skip ETFs, mutual funds, preferred shares
-        if any(c in symbol for c in ["-", ".", "^", "/"]):
-            continue
-        if len(symbol) > 5:
-            continue
-
-        price   = float(q.get("regularMarketPrice") or 0)
-        volume  = int(q.get("regularMarketVolume") or 0)
-        chng    = float(q.get("regularMarketChangePercent") or 0)
-        open_p  = float(q.get("regularMarketOpen") or price)
-        float_s = q.get("floatShares")
-
-        if price < _MIN_PRICE or price > _MAX_PRICE:
-            continue
-        if volume < _MIN_VOLUME:
-            continue
-
-        out.append({
-            "ticker":       symbol,
-            "price":        price,
-            "volume":       volume,
-            "change_pct":   round(chng, 2),
-            "open":         open_p,
-            "float_shares": float_s,
-            "avg_volume":   int(q.get("averageDailyVolume3Month") or 1_000_000),
-        })
-
-    # Sort by % gain descending — most explosive first
-    out.sort(key=lambda x: x["change_pct"], reverse=True)
-    return out
-
-
 async def _fetch_candles(client: httpx.AsyncClient, ticker: str) -> list[CandleData]:
-    """Fetch today's 1-minute candles from Yahoo Finance chart endpoint."""
+    """Fetch today's 1-minute candles (including pre-market) via Yahoo chart API."""
     try:
         r = await client.get(
             _CHART_URL.format(ticker=ticker),
-            params={"interval": "1m", "range": "1d", "includePrePost": "false"},
+            params={"interval": "1m", "range": "1d", "includePrePost": "true"},
         )
         r.raise_for_status()
         raw = r.json()
@@ -141,14 +182,14 @@ async def _fetch_candles(client: httpx.AsyncClient, ticker: str) -> list[CandleD
         if not result:
             return []
 
-        res      = result[0]
-        ts_list  = res.get("timestamp", [])
-        quotes   = res.get("indicators", {}).get("quote", [{}])[0]
-        opens    = quotes.get("open", [])
-        highs    = quotes.get("high", [])
-        lows     = quotes.get("low", [])
-        closes   = quotes.get("close", [])
-        volumes  = quotes.get("volume", [])
+        res     = result[0]
+        ts_list = res.get("timestamp", [])
+        quotes  = res.get("indicators", {}).get("quote", [{}])[0]
+        opens   = quotes.get("open", [])
+        highs   = quotes.get("high", [])
+        lows    = quotes.get("low", [])
+        closes  = quotes.get("close", [])
+        vols    = quotes.get("volume", [])
 
         candles: list[CandleData] = []
         cum_vol = 0
@@ -156,11 +197,11 @@ async def _fetch_candles(client: httpx.AsyncClient, ticker: str) -> list[CandleD
 
         for i, ts in enumerate(ts_list):
             try:
-                o = opens[i]
-                h = highs[i]
+                o  = opens[i]
+                h  = highs[i]
                 lo = lows[i]
-                c = closes[i]
-                v = volumes[i] or 0
+                c  = closes[i]
+                v  = vols[i] or 0
 
                 if o is None or h is None or lo is None or c is None:
                     continue

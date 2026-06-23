@@ -21,8 +21,9 @@ import type { BacktestResult } from "@/types";
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 interface PeriodOption {
-  value: number; // years as float (e.g. 0.0833 = 1 month)
-  label: string; // display label
+  value: number;  // years as float (e.g. 0.0833 = 1 month)
+  label: string;  // display label
+  group: "trading-days" | "calendar";
 }
 
 interface LabStrategy {
@@ -42,25 +43,34 @@ interface ChatMsg {
 
 const STORAGE_KEY = "strategy_lab_strategies";
 const MAX_STRATEGIES = 15;
+const TRADING_DAYS_PER_YEAR = 252;
+
 const PERIOD_OPTIONS: PeriodOption[] = [
-  { value: 1  / 365, label: "1D"  },
-  { value: 5  / 365, label: "5D"  },
-  { value: 10 / 365, label: "10D" },
-  { value: 1  / 12,  label: "1M"  },
-  { value: 3  / 12,  label: "3M"  },
-  { value: 6  / 12,  label: "6M"  },
-  { value: 1,        label: "1Y"  },
-  { value: 3,        label: "3Y"  },
-  { value: 5,        label: "5Y"  },
-  { value: 10,       label: "10Y" },
-  { value: 15,       label: "15Y" },
-  { value: 20,       label: "20Y" },
+  // ── ימי מסחר ──────────────────────────────────────────────────────────────
+  { value: 30  / TRADING_DAYS_PER_YEAR, label: "30T",  group: "trading-days" },
+  { value: 60  / TRADING_DAYS_PER_YEAR, label: "60T",  group: "trading-days" },
+  { value: 90  / TRADING_DAYS_PER_YEAR, label: "90T",  group: "trading-days" },
+  { value: 100 / TRADING_DAYS_PER_YEAR, label: "100T", group: "trading-days" },
+  // ── לוח שנה ───────────────────────────────────────────────────────────────
+  { value: 1  / 12,  label: "1M",  group: "calendar" },
+  { value: 3  / 12,  label: "3M",  group: "calendar" },
+  { value: 6  / 12,  label: "6M",  group: "calendar" },
+  { value: 1,        label: "1Y",  group: "calendar" },
+  { value: 3,        label: "3Y",  group: "calendar" },
+  { value: 5,        label: "5Y",  group: "calendar" },
+  { value: 10,       label: "10Y", group: "calendar" },
+  { value: 15,       label: "15Y", group: "calendar" },
+  { value: 20,       label: "20Y", group: "calendar" },
 ];
 
 function formatPeriod(years: number): string {
-  const days = years * 365;
-  if (days < 14)  return `${Math.round(days)} ימים`;
-  if (years < 1)  { const m = Math.round(years * 12); return m === 1 ? "חודש" : `${m} חודשים`; }
+  const opt = PERIOD_OPTIONS.find(o => Math.abs(o.value - years) < 0.0001);
+  if (opt) return opt.label;
+  const tradingDays = Math.round(years * TRADING_DAYS_PER_YEAR);
+  if (tradingDays <= 110) return `${tradingDays}T`;
+  const calDays = years * 365;
+  if (calDays < 14)  return `${Math.round(calDays)} ימים`;
+  if (years < 1) { const m = Math.round(years * 12); return m === 1 ? "חודש" : `${m} חודשים`; }
   return `${years} שנים`;
 }
 
@@ -158,11 +168,33 @@ export default function StrategyLabPage() {
   const [chatLoading, setChatLoading] = useState(false);
   const [chatRefined, setChatRefined] = useState<string | null>(null);
 
-  // Load from localStorage on mount
+  // Load from localStorage + sync active strategies from backend DB
   useEffect(() => {
     const stored = loadFromStorage();
-    setStrategies(stored);
-    if (stored.length > 0) setSelectedId(stored[0].id);
+
+    // Fetch active strategies from backend and merge any that are missing locally
+    import("@/lib/api").then(({ getActiveStrategies }) => {
+      getActiveStrategies()
+        .then(activeFromDB => {
+          const localNames = new Set(stored.map(s => s.name));
+          const fromDB: LabStrategy[] = activeFromDB
+            .filter(s => !localNames.has(s.name))
+            .map(s => ({
+              id: s.tracker_id,
+              name: s.name,
+              description: (s.config as Record<string, unknown>)?.description as string ?? "",
+              years: (s.config as Record<string, unknown>)?.lookback_years as number ?? 1,
+              status: "idle" as const,
+            }));
+          const merged = [...stored, ...fromDB];
+          setStrategies(merged);
+          if (merged.length > 0) setSelectedId(merged[0].id);
+        })
+        .catch(() => {
+          setStrategies(stored);
+          if (stored.length > 0) setSelectedId(stored[0].id);
+        });
+    });
   }, []);
 
   // Persist to localStorage whenever strategies change
@@ -378,7 +410,7 @@ export default function StrategyLabPage() {
                         <div className="mt-2 flex items-center gap-2">
                           <StatusBadge status={strat.status} />
                           <span className="text-[10px] text-[#475569]">
-                            {PERIOD_OPTIONS.find(p => p.value === strat.years)?.label ?? `${strat.years}Y`}
+                            {formatPeriod(strat.years)}
                           </span>
                         </div>
                       </div>
@@ -587,24 +619,55 @@ export default function StrategyLabPage() {
 
                   {/* Period selector */}
                   <div className="mb-6">
-                    <label className="mb-2 block text-xs font-medium text-[#64748B] uppercase tracking-wider">
+                    <label className="mb-3 block text-xs font-medium text-[#64748B] uppercase tracking-wider">
                       תקופת בדיקה
                     </label>
-                    <div className="flex gap-2 flex-wrap">
-                      {PERIOD_OPTIONS.map((opt) => (
-                        <button
-                          key={opt.value}
-                          onClick={() => updateSelected({ years: opt.value })}
-                          className={cn(
-                            "rounded-lg border px-4 py-2 text-sm font-semibold transition-all",
-                            selected.years === opt.value
-                              ? "border-[#6366F1] bg-[#6366F1]/15 text-[#6366F1]"
-                              : "border-[#1E293B] text-[#64748B] hover:border-[#263147] hover:text-[#94A3B8]"
-                          )}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
+
+                    {/* Trading days group */}
+                    <div className="mb-3">
+                      <div className="mb-1.5 flex items-center gap-2">
+                        <span className="text-[10px] font-medium text-[#475569] uppercase tracking-wider">ימי מסחר</span>
+                        <span className="text-[10px] text-[#334155]">T = יום מסחר (≈252/שנה)</span>
+                      </div>
+                      <div className="flex gap-2">
+                        {PERIOD_OPTIONS.filter(o => o.group === "trading-days").map((opt) => (
+                          <button
+                            key={opt.value}
+                            onClick={() => updateSelected({ years: opt.value })}
+                            className={cn(
+                              "rounded-lg border px-4 py-2 text-sm font-semibold transition-all",
+                              Math.abs(selected.years - opt.value) < 0.0001
+                                ? "border-[#6366F1] bg-[#6366F1]/15 text-[#6366F1]"
+                                : "border-[#1E293B] text-[#64748B] hover:border-[#263147] hover:text-[#94A3B8]"
+                            )}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Calendar group */}
+                    <div>
+                      <div className="mb-1.5">
+                        <span className="text-[10px] font-medium text-[#475569] uppercase tracking-wider">חודשים / שנים</span>
+                      </div>
+                      <div className="flex gap-2 flex-wrap">
+                        {PERIOD_OPTIONS.filter(o => o.group === "calendar").map((opt) => (
+                          <button
+                            key={opt.value}
+                            onClick={() => updateSelected({ years: opt.value })}
+                            className={cn(
+                              "rounded-lg border px-4 py-2 text-sm font-semibold transition-all",
+                              Math.abs(selected.years - opt.value) < 0.0001
+                                ? "border-[#6366F1] bg-[#6366F1]/15 text-[#6366F1]"
+                                : "border-[#1E293B] text-[#64748B] hover:border-[#263147] hover:text-[#94A3B8]"
+                            )}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
 

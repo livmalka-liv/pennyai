@@ -1,6 +1,7 @@
 """Live strategy management — activate, deactivate, list, scan, and signals."""
 
-from datetime import date, timedelta, datetime as dt
+import asyncio
+from datetime import date, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -147,6 +148,78 @@ def toggle_for_sale(
     tracker.config_json = cfg
     db.commit()
     return {"tracker_id": tracker_id, "for_sale": cfg["for_sale"]}
+
+
+@router.post("/{tracker_id}/backtest")
+async def backtest_tracker(
+    tracker_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Run a historical backtest on a saved strategy tracker using real Yahoo Finance data.
+    Useful for strategies that haven't been live long enough to judge performance.
+    """
+    tracker = (
+        db.query(StrategyTracker)
+        .filter(StrategyTracker.id == tracker_id, StrategyTracker.user_id == current_user.id)
+        .first()
+    )
+    if not tracker:
+        raise HTTPException(status_code=404, detail="Tracker not found")
+
+    cfg = tracker.config_json or {}
+    strategy_dict = cfg.get("strategy") or cfg
+    if not strategy_dict or not strategy_dict.get("rules"):
+        raise HTTPException(status_code=400, detail="Tracker has no strategy config to backtest")
+
+    try:
+        from app.models.schemas import StrategyConfig
+        from app.core.backtest_engine import run_backtest
+        strategy = StrategyConfig(**strategy_dict)
+        result = await asyncio.to_thread(run_backtest, strategy)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return result
+
+
+@router.get("/scan-status")
+def scan_status(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return current scanner state: market hours, active strategies, tracked tickers."""
+    from datetime import datetime, timezone
+    from app.core.multi_strategy_runner import _latest_prices, _is_market_open, _is_in_scan_window
+
+    try:
+        from app.core.multi_strategy_runner import _last_data_source
+    except ImportError:
+        _last_data_source = "unknown"
+
+    now_utc = datetime.now(timezone.utc)
+    il_hour = (now_utc.hour + 3) % 24
+    et_hour = (now_utc.hour - 4) % 24
+
+    trackers = (
+        db.query(StrategyTracker)
+        .filter(StrategyTracker.user_id == current_user.id, StrategyTracker.is_active == True)  # noqa: E712
+        .all()
+    )
+
+    return {
+        "market_open": _is_market_open(),
+        "scan_window_active": _is_in_scan_window(),
+        "time_israel": f"{il_hour:02d}:{now_utc.minute:02d}",
+        "time_et": f"{et_hour:02d}:{now_utc.minute:02d}",
+        "market_opens_israel": "16:30",
+        "market_closes_israel": "23:00",
+        "data_source": _last_data_source,
+        "active_strategies": [{"id": t.id, "name": t.name} for t in trackers],
+        "tracked_tickers": sorted(_latest_prices.keys()),
+        "tracked_count": len(_latest_prices),
+    }
 
 
 @router.get("/signals")

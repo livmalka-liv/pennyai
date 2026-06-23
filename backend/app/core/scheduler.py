@@ -119,48 +119,49 @@ async def _launch_realtime():
 
 async def _continuous_scanner_loop():
     """
-    Runs continuously.
-    - Every 5 seconds:  fast TP/SL check on open positions (uses cached prices)
-    - Every 60 seconds: full market scan → finds new setups + refreshes price cache
-    Window: 11:00–23:00 Israel time, Mon–Fri only.
+    Two-speed loop:
+    - Every 1 second:  TP/SL check + evaluate strategies on cached data  (no network)
+    - Every 5 seconds: full data refresh from Yahoo/IBKR + save new signals
+    Window: 11:00–23:00 Israel time, Mon–Fri.
     """
     import time as _time
     from app.data.database import SessionLocal
 
-    last_full_scan = 0.0
-    FULL_SCAN_INTERVAL = 60  # seconds
-    FAST_CHECK_INTERVAL = 1  # second
+    last_data_refresh = 0.0
+    DATA_REFRESH_INTERVAL = 5  # seconds — rate-limit safe for Yahoo Finance
 
     while True:
         try:
             from app.core.multi_strategy_runner import (
                 _is_in_scan_window,
                 scan_and_save_signals,
+                evaluate_on_cached_data,
                 check_tp_sl_fast,
             )
 
             if _is_in_scan_window():
                 now = _time.monotonic()
 
-                # Fast TP/SL check every 5 seconds
+                # ── Every second: TP/SL + strategy eval on cached data ──────
                 db = SessionLocal()
                 try:
                     await check_tp_sl_fast(db)
+                    await evaluate_on_cached_data(db)
                 finally:
                     db.close()
 
-                # Full scan every 60 seconds
-                if now - last_full_scan >= FULL_SCAN_INTERVAL:
+                # ── Every 5 seconds: fetch fresh data, save new signals ─────
+                if now - last_data_refresh >= DATA_REFRESH_INTERVAL:
                     db = SessionLocal()
                     try:
                         count = await scan_and_save_signals(db)
                         if count:
-                            logger.info(f"Continuous scanner: {count} new signals")
+                            logger.info(f"Data refresh: {count} new signals")
                     finally:
                         db.close()
-                    last_full_scan = now
+                    last_data_refresh = now
 
         except Exception as exc:
             logger.error(f"Continuous scanner loop error: {exc}")
 
-        await asyncio.sleep(FAST_CHECK_INTERVAL)  # 1 second
+        await asyncio.sleep(1)
