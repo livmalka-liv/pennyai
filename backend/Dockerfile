@@ -2,9 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# cache-bust: 2026-06-22
+# cache-bust: 2026-06-23a
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    python -c "import email_validator; import psycopg2; print('deps OK')"
 
 COPY . .
 
