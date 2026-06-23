@@ -295,14 +295,17 @@ async def _eval_strategy(
 async def _refresh_price_cache_only() -> None:
     """Fetch today's movers and update _latest_prices without needing active strategies.
     Called on every scan tick so /scan-status always shows real tracked tickers."""
-    global _latest_prices
+    global _latest_prices, _last_data_source
     from app.core.config import get_settings
     settings = get_settings()
 
     catalyst_days: list[CatalystDay] = []
+    source = "none"
     try:
         from app.data.yahoo_provider import get_todays_movers as yahoo_movers
         catalyst_days = await yahoo_movers()
+        if catalyst_days:
+            source = "yahoo"
     except Exception as exc:
         logger.debug(f"_refresh_price_cache_only yahoo: {exc}")
 
@@ -310,8 +313,13 @@ async def _refresh_price_cache_only() -> None:
         try:
             from app.data.polygon_provider import get_todays_movers
             catalyst_days = get_todays_movers(settings.polygon_api_key)
+            if catalyst_days:
+                source = "polygon"
         except Exception as exc:
             logger.debug(f"_refresh_price_cache_only polygon: {exc}")
+
+    if catalyst_days:
+        _last_data_source = source
 
     for day in catalyst_days:
         if day.candles_1m:
