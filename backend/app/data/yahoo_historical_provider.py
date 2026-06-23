@@ -8,7 +8,7 @@ from the daily OHLCV so the backtest engine has authentic price action to test a
 
 import logging
 import random
-from datetime import date, timedelta, datetime
+from datetime import date, datetime
 
 from app.data.types import CandleData, CatalystDay
 
@@ -36,43 +36,106 @@ _MIN_GAP_PCT = 5.0   # at least 5% gap-up to count as a catalyst day
 _MIN_RVOL    = 2.0   # at least 2× relative volume
 
 
+_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/json",
+}
+
+
+def _fetch_daily_ohlcv(ticker: str, lookback_years: float):
+    """Fetch daily OHLCV via Yahoo chart API (httpx sync). Returns a pandas DataFrame."""
+    import pandas as pd
+    import httpx
+
+    # Yahoo range: 1y, 2y, 5y, 10y, max
+    years = int(lookback_years)
+    if years <= 1:
+        yrange = "1y"
+    elif years <= 2:
+        yrange = "2y"
+    elif years <= 5:
+        yrange = "5y"
+    else:
+        yrange = "10y"
+
+    try:
+        r = httpx.get(
+            _CHART_URL.format(ticker=ticker),
+            params={"interval": "1d", "range": yrange},
+            headers=_HEADERS,
+            timeout=15,
+        )
+        r.raise_for_status()
+        raw = r.json()
+
+        result = raw.get("chart", {}).get("result", [])
+        if not result:
+            return None
+
+        res     = result[0]
+        ts_list = res.get("timestamp", [])
+        quote   = res.get("indicators", {}).get("quote", [{}])[0]
+        adjclose = res.get("indicators", {}).get("adjclose", [{}])[0].get("adjclose", [])
+
+        opens   = quote.get("open",   [])
+        highs   = quote.get("high",   [])
+        lows    = quote.get("low",    [])
+        closes  = adjclose if adjclose else quote.get("close", [])
+        volumes = quote.get("volume", [])
+
+        if not ts_list:
+            return None
+
+        rows = []
+        for i, ts in enumerate(ts_list):
+            try:
+                o = opens[i]
+                h = highs[i]
+                lo = lows[i]
+                c = closes[i]
+                v = volumes[i]
+                if any(x is None for x in [o, h, lo, c, v]):
+                    continue
+                dt = datetime.fromtimestamp(ts).date()
+                rows.append({"Date": dt, "Open": o, "High": h, "Low": lo, "Close": c, "Volume": v})
+            except (IndexError, TypeError):
+                continue
+
+        if not rows:
+            return None
+
+        df = pd.DataFrame(rows).set_index("Date")
+        df.index = pd.to_datetime(df.index)
+        return df
+
+    except Exception as exc:
+        logger.debug(f"_fetch_daily_ohlcv {ticker}: {exc}")
+        return None
+
+
 def get_historical_catalyst_days(lookback_years: float) -> list[CatalystDay]:
     """
-    Download real daily OHLCV from Yahoo Finance for each ticker in the watchlist.
-    Returns CatalystDay objects for every day that had a significant move.
+    Download real daily OHLCV from Yahoo Finance chart API for each watchlist ticker.
+    Returns CatalystDay objects for every day that had a significant catalyst move.
+    Uses direct httpx calls (no yfinance) so it works in Docker/Railway environments.
     """
-    try:
-        import yfinance as yf
-    except ImportError:
-        logger.warning("yfinance not installed — cannot fetch historical data")
-        return []
-
-    end_date   = date.today()
-    start_date = end_date - timedelta(days=int(lookback_years * 365) + 30)
-
     all_days: list[CatalystDay] = []
     ok_count = 0
 
     for ticker in _WATCHLIST:
         try:
-            raw = yf.download(
-                ticker,
-                start=start_date.isoformat(),
-                end=end_date.isoformat(),
-                interval="1d",
-                progress=False,
-                auto_adjust=True,
-            )
-            if raw is None or raw.empty:
+            df = _fetch_daily_ohlcv(ticker, lookback_years)
+            if df is None or df.empty:
                 continue
 
-            days = _extract_catalyst_days(ticker, raw)
+            days = _extract_catalyst_days(ticker, df)
             all_days.extend(days)
             if days:
                 ok_count += 1
 
         except Exception as exc:
-            logger.debug(f"yfinance download failed for {ticker}: {exc}")
+            logger.debug(f"historical fetch failed for {ticker}: {exc}")
             continue
 
     logger.info(
