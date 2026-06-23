@@ -11,7 +11,12 @@ _RAW_KEY = os.getenv("ENCRYPTION_KEY", "")
 if _RAW_KEY:
     _fernet = Fernet(_RAW_KEY.encode() if isinstance(_RAW_KEY, str) else _RAW_KEY)
 else:
-    # Auto-generate a key in dev — not persistent between restarts, fine for dev
+    import logging as _log
+    _log.getLogger(__name__).critical(
+        "ENCRYPTION_KEY env var is not set! Broker credentials will be lost on every restart. "
+        "Set a permanent key in Railway environment variables."
+    )
+    # Auto-generate a key — NOT persistent between restarts
     _fernet = Fernet(Fernet.generate_key())
 
 

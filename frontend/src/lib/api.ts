@@ -115,6 +115,21 @@ export async function runBacktest(strategy: StrategyConfig, userId = "demo"): Pr
   };
 }
 
+export async function getActiveStrategies(): Promise<ActiveStrategy[]> {
+  return apiFetch<ActiveStrategy[]>("/live-strategies/");
+}
+
+export interface ActiveStrategy {
+  tracker_id: string;
+  name: string;
+  started_at: string | null;
+  config: Record<string, unknown>;
+}
+
+export async function deactivateStrategy(trackerId: string): Promise<void> {
+  await apiFetch(`/live-strategies/${trackerId}`, { method: "DELETE" });
+}
+
 export async function activateForLiveScan(strategy: StrategyConfig): Promise<{ tracker_id: string }> {
   return apiFetch("/live-strategies/activate", {
     method: "POST",
@@ -131,8 +146,16 @@ export async function activateForLiveScan(strategy: StrategyConfig): Promise<{ t
   });
 }
 
-export async function getMySignals(days = 7) {
-  return apiFetch<SignalRow[]>(`/live-strategies/signals?days=${days}`);
+export async function getMySignals(params: { days?: number; fromDate?: string; toDate?: string } = {}) {
+  const { days = 7, fromDate, toDate } = params;
+  const q = new URLSearchParams();
+  if (fromDate && toDate) {
+    q.set("from_date", fromDate);
+    q.set("to_date", toDate);
+  } else {
+    q.set("days", String(days));
+  }
+  return apiFetch<SignalRow[]>(`/live-strategies/signals?${q.toString()}`);
 }
 
 export interface SignalRow {
@@ -149,9 +172,34 @@ export interface SignalRow {
   exit_reason: string | null;
   return_pct: number | null;
   dollars_gain: number | null;
+  hold_minutes: number | null;
   status: "open" | "win" | "loss" | "flat";
   catalyst: string | null;
   rvol: number | null;
+}
+
+export interface StrategyStat {
+  tracker_id: string;
+  name: string;
+  is_active: boolean;
+  for_sale: boolean;
+  total_trades: number;
+  open_trades: number;
+  win_count: number;
+  win_rate: number;
+  total_dollars: number;
+  first_trade_date: string | null;
+  trading_days_live: number;
+  is_proven: boolean;
+  started_at: string | null;
+}
+
+export async function getStrategyStats(): Promise<StrategyStat[]> {
+  return apiFetch<StrategyStat[]>("/live-strategies/stats");
+}
+
+export async function toggleForSale(trackerId: string): Promise<{ tracker_id: string; for_sale: boolean }> {
+  return apiFetch(`/live-strategies/${trackerId}/for-sale`, { method: "PATCH" });
 }
 
 export async function clarifyStrategy(

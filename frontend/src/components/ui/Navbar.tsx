@@ -21,6 +21,7 @@ const navLinks = [
   { href: "/performance", label: "📈 Performance" },
   { href: "/strategy-lab", label: "🧪 Strategy Lab" },
   { href: "/signals",      label: "⚡ אותות" },
+  { href: "/my-lab",       label: "🔬 המעבדה שלי" },
 ];
 
 const TIER_LABEL: Record<string, { label: string; color: string; bg: string }> = {

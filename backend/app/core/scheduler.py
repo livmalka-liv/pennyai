@@ -37,15 +37,6 @@ def start_scheduler():
         finally:
             db.close()
 
-    # Custom strategy scanner — every 5 min (runs only when market is open)
-    def sync_custom_scan():
-        from app.core.multi_strategy_runner import scan_and_save_signals
-        db = SessionLocal()
-        try:
-            asyncio.create_task(scan_and_save_signals(db))
-        finally:
-            db.close()
-
     # ── Email report helpers ──────────────────────────────────────────────────
     def _send_report(period: str):
         from app.core.email_service import send_report
@@ -64,15 +55,6 @@ def start_scheduler():
 
     def sync_monthly_report():
         _send_report("monthly")
-
-    scheduler.add_job(
-        sync_custom_scan,
-        "interval",
-        minutes=5,
-        id="custom_strategy_scan",
-        name="Custom strategy live scanner",
-        replace_existing=True,
-    )
 
     # Close open trades at 23:05 Israel (after US market close)
     scheduler.add_job(
@@ -121,9 +103,10 @@ def start_scheduler():
 
     scheduler.start()
 
-    # Launch real-time WebSocket scanner as persistent background task
-    asyncio.get_event_loop().create_task(_launch_realtime())
-    logger.info("Scheduler started + real-time scanner launching (WebSocket + REST fallback)")
+    loop = asyncio.get_event_loop()
+    loop.create_task(_launch_realtime())
+    loop.create_task(_continuous_scanner_loop())
+    logger.info("Scheduler started + continuous scanner loop running (11:00–23:00 IL)")
 
 
 async def _launch_realtime():
@@ -132,3 +115,52 @@ async def _launch_realtime():
         await start_realtime_scanner()
     except Exception as e:
         logger.error(f"Real-time scanner crashed: {e}")
+
+
+async def _continuous_scanner_loop():
+    """
+    Runs continuously.
+    - Every 5 seconds:  fast TP/SL check on open positions (uses cached prices)
+    - Every 60 seconds: full market scan → finds new setups + refreshes price cache
+    Window: 11:00–23:00 Israel time, Mon–Fri only.
+    """
+    import time as _time
+    from app.data.database import SessionLocal
+
+    last_full_scan = 0.0
+    FULL_SCAN_INTERVAL = 60  # seconds
+    FAST_CHECK_INTERVAL = 1  # second
+
+    while True:
+        try:
+            from app.core.multi_strategy_runner import (
+                _is_in_scan_window,
+                scan_and_save_signals,
+                check_tp_sl_fast,
+            )
+
+            if _is_in_scan_window():
+                now = _time.monotonic()
+
+                # Fast TP/SL check every 5 seconds
+                db = SessionLocal()
+                try:
+                    await check_tp_sl_fast(db)
+                finally:
+                    db.close()
+
+                # Full scan every 60 seconds
+                if now - last_full_scan >= FULL_SCAN_INTERVAL:
+                    db = SessionLocal()
+                    try:
+                        count = await scan_and_save_signals(db)
+                        if count:
+                            logger.info(f"Continuous scanner: {count} new signals")
+                    finally:
+                        db.close()
+                    last_full_scan = now
+
+        except Exception as exc:
+            logger.error(f"Continuous scanner loop error: {exc}")
+
+        await asyncio.sleep(FAST_CHECK_INTERVAL)  # 1 second

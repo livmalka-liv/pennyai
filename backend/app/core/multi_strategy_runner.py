@@ -1,9 +1,16 @@
 """
 Multi-strategy runner — manages multiple StrategyConfig objects running
-simultaneously against live Polygon data.
+simultaneously against live market data.
+
+Slippage model: identical to backtest_engine
+  entry cost  = max(user_slippage, $0.02/share) + half bid-ask spread
+  exit cost   = max(user_slippage, $0.02/share) + half bid-ask spread
+TP/SL:       read from strategy exit rules (default +20% / -7%)
+Parallelism: up to 15 strategies evaluated concurrently per user
 """
 
 import uuid
+import asyncio
 import logging
 from datetime import datetime, timezone, date
 from typing import Optional
@@ -19,60 +26,320 @@ ISRAEL_UTC_OFFSET = 3   # summer IDT UTC+3
 ET_UTC_OFFSET     = -4  # summer EDT UTC-4
 POSITION_DOLLARS  = 1000
 
+# In-memory price cache — refreshed on every full scan
+_latest_prices: dict[str, float] = {}
+
+# Semaphore: at most 15 strategy evaluations running concurrently
+_SCAN_SEM: Optional[asyncio.Semaphore] = None
+
+
+def _get_semaphore() -> asyncio.Semaphore:
+    global _SCAN_SEM
+    if _SCAN_SEM is None:
+        _SCAN_SEM = asyncio.Semaphore(15)
+    return _SCAN_SEM
+
+
+# ─── Slippage helpers (mirrors backtest_engine) ─────────────────────────────
+
+_MIN_SLIP_PER_SHARE = 0.02
+
+
+def _spread_pct(price: float) -> float:
+    """Half bid-ask spread for a penny stock at this price tier."""
+    if price < 1.0:
+        return 1.5
+    elif price < 3.0:
+        return 1.0
+    elif price < 10.0:
+        return 0.5
+    elif price < 20.0:
+        return 0.25
+    return 0.1
+
+
+def _slip_pct(price: float, user_pct: float) -> float:
+    """Effective slippage %: worse of user-set % or $0.02/share floor."""
+    return max(user_pct, (_MIN_SLIP_PER_SHARE / price) * 100)
+
+
+def _entry_cost_pct(price: float, user_slip: float) -> float:
+    return _slip_pct(price, user_slip) + _spread_pct(price)
+
+
+def _exit_cost_pct(price: float, user_slip: float) -> float:
+    return _slip_pct(price, user_slip) + _spread_pct(price)
+
+
+def _apply_entry(price: float, user_slip: float) -> float:
+    """Realistic fill price when buying (we pay more)."""
+    return round(price * (1 + _entry_cost_pct(price, user_slip) / 100), 4)
+
+
+def _apply_exit(price: float, user_slip: float) -> float:
+    """Realistic fill price when selling (we receive less)."""
+    return round(price * (1 - _exit_cost_pct(price, user_slip) / 100), 4)
+
+
+# ─── TP / SL from strategy config ────────────────────────────────────────────
+
+def _tp_sl_pct(config_dict: dict) -> tuple[float, float]:
+    """
+    Parse exit rules from strategy config.
+    Returns (tp_pct, sl_pct_positive).  Defaults: +20%, 7%.
+    """
+    try:
+        from app.models.schemas import StrategyConfig, RuleType
+        sc = StrategyConfig(**config_dict)
+        tp_pct, sl_pct = 20.0, 7.0
+        for rule in sc.rules:
+            if rule.type == RuleType.EXIT:
+                pct = rule.parameters.get("pct", 0)
+                if pct > 0:
+                    tp_pct = float(pct)
+                elif pct < 0:
+                    sl_pct = float(abs(pct))
+        return tp_pct, sl_pct
+    except Exception:
+        return 20.0, 7.0
+
+
+def _user_slip(config_dict: dict) -> float:
+    try:
+        from app.models.schemas import StrategyConfig
+        return StrategyConfig(**config_dict).slippage or 0.0
+    except Exception:
+        return 0.0
+
+
+# ─── Time helpers ─────────────────────────────────────────────────────────────
 
 def _is_market_open() -> bool:
-    """Return True if current time is within US regular market hours (9:30–16:00 ET)."""
-    now_utc = datetime.now(timezone.utc)
-    now_et_hour  = (now_utc.hour + ET_UTC_OFFSET) % 24
-    now_et_min   = now_utc.minute
-    now_et_total = now_et_hour * 60 + now_et_min
-    open_total   = 9 * 60 + 30
-    close_total  = 16 * 60
-    return open_total <= now_et_total < close_total
+    """US regular session 9:30–16:00 ET."""
+    now = datetime.now(timezone.utc)
+    et_total = ((now.hour + ET_UTC_OFFSET) % 24) * 60 + now.minute
+    return 9 * 60 + 30 <= et_total < 16 * 60
 
 
-async def scan_and_save_signals(db: Session, user_id: Optional[str] = None) -> int:
+def _is_in_scan_window() -> bool:
+    """11:00–23:00 Israel time, Mon–Fri."""
+    now = datetime.now(timezone.utc)
+    il_hour = (now.hour + ISRAEL_UTC_OFFSET) % 24
+    dow = now.weekday()
+    if dow >= 5:
+        return False
+    return 11 <= il_hour < 23
+
+
+def _et_hhmm() -> str:
+    now = datetime.now(timezone.utc)
+    h = (now.hour + ET_UTC_OFFSET) % 24
+    return f"{h:02d}:{now.minute:02d}"
+
+
+def _il_hhmm() -> str:
+    now = datetime.now(timezone.utc)
+    h = (now.hour + ISRAEL_UTC_OFFSET) % 24
+    return f"{h:02d}:{now.minute:02d}"
+
+
+def _hold_minutes(entry_et: str, exit_et: str) -> int:
+    """Minutes between two HH:MM strings (ET). Handles midnight crossings."""
+    try:
+        eh, em = int(entry_et[:2]), int(entry_et[3:])
+        xh, xm = int(exit_et[:2]), int(exit_et[3:])
+        return max(1, (xh * 60 + xm) - (eh * 60 + em))
+    except Exception:
+        return 1
+
+
+# ─── Fast TP/SL check (every 1 second) ───────────────────────────────────────
+
+async def check_tp_sl_fast(db: Session) -> int:
     """
-    Scan active custom strategies and save new signals as PaperTrades.
-    If user_id is given, scans only that user; otherwise scans all users (scheduler job).
-    Returns the number of new signals saved.
+    Check all open signals against the in-memory price cache.
+    Called every second by the continuous scanner loop.
+    Applies realistic exit slippage before recording the exit price.
     """
-    if not _is_market_open():
-        logger.debug("scan_and_save_signals: market closed, skipping")
-        return 0
-
-    q = db.query(StrategyTracker.user_id).filter(
-        StrategyTracker.is_active == True  # noqa: E712
-    )
-    if user_id:
-        q = q.filter(StrategyTracker.user_id == user_id)
-    rows = q.distinct().all()
-    if not rows:
+    if not _latest_prices:
         return 0
 
     today = date.today().isoformat()
-    now_utc = datetime.now(timezone.utc)
-    entry_time_il = f"{(now_utc.hour + ISRAEL_UTC_OFFSET) % 24:02d}:{now_utc.minute:02d}"
-    entry_time_et = f"{(now_utc.hour + ET_UTC_OFFSET) % 24:02d}:{now_utc.minute:02d}"
+    open_trades = (
+        db.query(PaperTrade)
+        .filter(
+            PaperTrade.strategy_id.like("custom:%"),
+            PaperTrade.trade_date == today,
+            PaperTrade.status == "open",
+        )
+        .all()
+    )
+    if not open_trades:
+        return 0
+
+    exit_et = _et_hhmm()
+    closed = 0
+
+    for trade in open_trades:
+        price = _latest_prices.get(trade.ticker)
+        if price is None:
+            continue
+
+        raw_tp = trade.tp_price
+        raw_sl = trade.sl_price
+
+        hit_tp = raw_tp is not None and price >= raw_tp
+        hit_sl = raw_sl is not None and price <= raw_sl
+
+        if not hit_tp and not hit_sl:
+            continue
+
+        # Use $0.02/share floor slippage (no user config in fast path)
+        if hit_tp and (not hit_sl or raw_tp <= raw_sl):  # type: ignore[operator]
+            raw_exit = raw_tp
+            trade.status = "win"
+            trade.exit_reason = "TP"
+        else:
+            raw_exit = raw_sl
+            trade.status = "loss"
+            trade.exit_reason = "SL"
+
+        # Apply exit slippage
+        actual_exit = _apply_exit(raw_exit, 0.0)  # 0% user slip — floor applies
+        trade.exit_price = actual_exit
+        trade.exit_time = exit_et
+        trade.hold_minutes = _hold_minutes(trade.entry_time_et, exit_et)
+        trade.return_pct = round(
+            (actual_exit - trade.entry_price) / trade.entry_price * 100, 2
+        )
+        trade.dollars_gain = round(
+            (actual_exit - trade.entry_price) / trade.entry_price * POSITION_DOLLARS, 2
+        )
+        closed += 1
+
+    if closed:
+        db.commit()
+        logger.info(f"check_tp_sl_fast: closed {closed} signals")
+    return closed
+
+
+# ─── Single strategy evaluator ───────────────────────────────────────────────
+
+async def _eval_strategy(
+    entry: dict,
+    catalyst_days: list[CatalystDay],
+    entry_time_et: str,
+    entry_time_il: str,
+) -> list[dict]:
+    """Evaluate one strategy against catalyst_days. Runs inside semaphore."""
+    async with _get_semaphore():
+        from app.core.backtest_engine import _apply_filters, _candles_to_df, _detect_entry_signal
+        from app.models.schemas import StrategyConfig
+
+        config_dict = entry.get("config") or {}
+        strategy_name = entry.get("name", config_dict.get("name", "Unknown"))
+
+        try:
+            strategy = StrategyConfig(**config_dict)
+        except Exception as exc:
+            logger.warning(f"_eval_strategy: invalid config for '{strategy_name}': {exc}")
+            return []
+
+        user_slip = strategy.slippage or 0.0
+        tp_pct, sl_pct = _tp_sl_pct(config_dict)
+        filtered = _apply_filters(catalyst_days, strategy)
+        signals = []
+
+        for day in filtered:
+            if not day.candles_1m:
+                continue
+            try:
+                df = _candles_to_df(day.candles_1m)
+                signal = _detect_entry_signal(df, strategy)
+                if signal is None:
+                    continue
+
+                _entry_min, raw_price = signal
+                actual_entry = _apply_entry(raw_price, user_slip)
+
+                signals.append(
+                    {
+                        "strategy_name": strategy_name,
+                        "ticker": day.ticker,
+                        "raw_entry": round(raw_price, 4),
+                        "entry_price": actual_entry,
+                        "tp_pct": tp_pct,
+                        "sl_pct": sl_pct,
+                        "user_slip": user_slip,
+                        "catalyst_type": day.catalyst_type,
+                        "rvol": round(day.rvol, 1),
+                        "trade_date": str(day.date),
+                        "entry_time_et": entry_time_et,
+                        "entry_time_il": entry_time_il,
+                    }
+                )
+            except Exception as exc:
+                logger.warning(f"_eval_strategy: {day.ticker}/{day.date} / '{strategy_name}': {exc}")
+
+        return signals
+
+
+# ─── Full scan ────────────────────────────────────────────────────────────────
+
+async def scan_and_save_signals(db: Session, user_id: Optional[str] = None, force: bool = False) -> int:
+    """
+    Full market scan:
+    1. Fetch latest catalyst days (IBKR → Polygon → Mock)
+    2. Update global price cache
+    3. Evaluate up to 15 strategies in parallel
+    4. Save new PaperTrades with realistic entry prices and slippage
+    5. Check TP/SL on open trades with fresh prices
+
+    Runs only within 11:00–23:00 Israel time window (bypass with force=True).
+    """
+    if not force and not _is_in_scan_window():
+        logger.debug("scan_and_save_signals: outside scan window, skipping")
+        return 0
+
+    q = db.query(StrategyTracker).filter(StrategyTracker.is_active == True)  # noqa: E712
+    if user_id:
+        q = q.filter(StrategyTracker.user_id == user_id)
+    trackers = q.all()
+    if not trackers:
+        return 0
+
+    today = date.today().isoformat()
+    entry_time_et = _et_hhmm()
+    entry_time_il = _il_hhmm()
+
+    # Group trackers by user_id to fetch market data once per user
+    from collections import defaultdict
+    by_user: dict[str, list] = defaultdict(list)
+    for t in trackers:
+        if t.user_id:
+            by_user[t.user_id].append(t)
 
     new_signals = 0
-    for (user_id,) in rows:
-        if not user_id:
-            continue
+    # Track (user_id, PaperTrade) pairs for auto-execute after commit
+    new_signal_records: list[tuple[str, PaperTrade]] = []
+
+    for uid, user_trackers in by_user.items():
         try:
-            signals, catalyst_days = await scan_and_signal(user_id, db)
+            signals, catalyst_days = await _fetch_and_signal(
+                uid, user_trackers, catalyst_days_override=None, db=db,
+                entry_time_et=entry_time_et, entry_time_il=entry_time_il
+            )
         except Exception as exc:
-            logger.warning(f"scan_and_save_signals: scan failed for {user_id}: {exc}")
+            logger.warning(f"scan_and_save_signals: failed for user {uid}: {exc}")
             continue
 
-        # Check TP/SL for already-open signals using this scan's market prices
+        # Check TP/SL on already-open signals using fresh prices
         try:
-            await _check_tp_sl(user_id, catalyst_days, db)
+            await _check_tp_sl_with_days(uid, catalyst_days, db, entry_time_et)
         except Exception as exc:
-            logger.warning(f"scan_and_save_signals: TP/SL check failed for {user_id}: {exc}")
+            logger.warning(f"scan_and_save_signals: TP/SL check failed for {uid}: {exc}")
 
         for sig in signals:
-            # Deduplicate: skip if same strategy+ticker already open today
             existing = (
                 db.query(PaperTrade)
                 .filter(
@@ -85,57 +352,267 @@ async def scan_and_save_signals(db: Session, user_id: Optional[str] = None) -> i
             if existing:
                 continue
 
-            entry = sig["entry_price"]
+            actual_entry = sig["entry_price"]
+            tp_pct = sig["tp_pct"]
+            sl_pct = sig["sl_pct"]
+
+            raw_tp = round(actual_entry * (1 + tp_pct / 100), 4)
+            raw_sl = round(actual_entry * (1 - sl_pct / 100), 4)
+
             trade = PaperTrade(
                 id=str(uuid.uuid4()),
-                strategy_id=f"custom:{user_id}:{sig['strategy_name']}",
+                strategy_id=f"custom:{uid}:{sig['strategy_name']}",
                 strategy_name=sig["strategy_name"],
                 ticker=sig["ticker"],
                 trade_date=today,
-                entry_time=entry_time_il,
-                entry_time_et=entry_time_et,
-                entry_price=entry,
-                tp_price=round(entry * 1.15, 4),
-                sl_price=round(entry * 0.95, 4),
+                entry_time=sig["entry_time_il"],
+                entry_time_et=sig["entry_time_et"],
+                entry_price=actual_entry,
+                tp_price=raw_tp,
+                sl_price=raw_sl,
                 status="open",
-                session="regular",
+                session="regular" if _is_market_open() else "premarket",
                 catalyst=sig.get("catalyst_type"),
                 rvol=sig.get("rvol"),
                 variant="custom",
             )
             db.add(trade)
+            new_signal_records.append((uid, trade))
             new_signals += 1
 
     if new_signals:
         db.commit()
         logger.info(f"scan_and_save_signals: saved {new_signals} new signals")
+
+    # Auto-execute: send real orders for users who have auto_execute=True broker
+    await _auto_execute_new_signals(new_signal_records, db)
+
     return new_signals
 
 
-async def activate_strategy(user_id: str, strategy: dict, db: Session) -> str:
+async def _auto_execute_new_signals(
+    records: list[tuple[str, PaperTrade]],
+    db: Session,
+) -> None:
     """
-    Save a strategy as active. Returns the StrategyTracker ID.
-    If a tracker with the same name already exists for this user, it is
-    updated in-place; otherwise a new row is created.
+    For each new signal, check if the owning user has a broker with auto_execute=True.
+    If so, place a real market order for POSITION_DOLLARS worth of shares.
+    Errors are logged but never propagate — the paper trade was already saved.
     """
-    name = strategy.get("name", "Unnamed Strategy")
+    if not records:
+        return
 
+    from app.models.db_models import BrokerConnection
+    from app.core.broker_manager import get_broker
+
+    # Cache auto-execute brokers per user to avoid repeated DB queries
+    _broker_cache: dict[str, Optional[BrokerConnection]] = {}
+
+    for uid, trade in records:
+        if uid not in _broker_cache:
+            conn = (
+                db.query(BrokerConnection)
+                .filter(
+                    BrokerConnection.user_id == uid,
+                    BrokerConnection.auto_execute == True,   # noqa: E712
+                    BrokerConnection.status == "connected",
+                )
+                .first()
+            )
+            _broker_cache[uid] = conn
+
+        conn = _broker_cache[uid]
+        if not conn:
+            continue
+
+        try:
+            broker = get_broker(conn.broker_type, conn.credentials_enc)
+            qty = max(1, int(POSITION_DOLLARS / trade.entry_price))
+            result = await broker.place_market_order(trade.ticker, "buy", qty)
+            logger.info(
+                f"auto_execute: {trade.ticker} x{qty} → {result.status} "
+                f"(fill={result.fill_price}) for user {uid}"
+            )
+        except Exception as exc:
+            logger.warning(f"auto_execute failed for {trade.ticker} user {uid}: {exc}")
+
+
+async def _fetch_and_signal(
+    user_id: str,
+    trackers: list,
+    catalyst_days_override: Optional[list],
+    db: Session,
+    entry_time_et: str,
+    entry_time_il: str,
+) -> tuple[list[dict], list[CatalystDay]]:
+    """Fetch market data for user, update price cache, evaluate all strategies in parallel."""
+    global _latest_prices
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    catalyst_days: list[CatalystDay] = catalyst_days_override or []
+
+    if not catalyst_days:
+        # Try IBKR
+        gw = _get_ibkr_gateway_url(user_id, db)
+        if gw:
+            try:
+                from app.data.ibkr_provider import get_ibkr_movers
+                ibkr_days = await get_ibkr_movers(gw)
+                if ibkr_days:
+                    catalyst_days = ibkr_days
+                    logger.info(f"Using IBKR real-time data ({len(ibkr_days)} movers) for {user_id}")
+            except Exception as exc:
+                logger.warning(f"IBKR failed for {user_id}: {exc}")
+
+    if not catalyst_days:
+        try:
+            if not settings.use_mock_data and settings.polygon_api_key:
+                from app.data.polygon_provider import get_catalyst_days, get_todays_movers
+                try:
+                    catalyst_days = get_catalyst_days(1, settings.polygon_api_key)
+                except Exception as exc:
+                    logger.warning(f"Polygon historical fetch failed for {user_id}: {exc}")
+                if catalyst_days:
+                    try:
+                        catalyst_days = get_todays_movers(settings.polygon_api_key) + catalyst_days
+                    except Exception:
+                        pass  # gainers endpoint requires paid tier — use historical only
+        except Exception as exc:
+            logger.warning(f"Polygon setup failed for {user_id}: {exc}")
+
+    # Yahoo Finance: today's real explosive movers — free, no API key
+    if not catalyst_days or len(catalyst_days) < 5:
+        try:
+            from app.data.yahoo_provider import get_todays_movers as yahoo_movers
+            yahoo_days = await yahoo_movers()
+            if yahoo_days:
+                # Prepend today's live movers; historical days serve as backfill
+                catalyst_days = yahoo_days + catalyst_days
+                logger.info(f"Yahoo Finance: {len(yahoo_days)} live movers prepended for {user_id}")
+        except Exception as exc:
+            logger.warning(f"Yahoo Finance provider failed for {user_id}: {exc}")
+
+    # Always fall back to mock if no real data available
+    if not catalyst_days:
+        from app.data.mock_provider import generate_catalyst_days
+        catalyst_days = generate_catalyst_days(lookback_years=1)
+        logger.info(f"Using mock data for {user_id} (no real data available)")
+
+    # Refresh price cache
+    for day in catalyst_days:
+        if day.candles_1m:
+            _latest_prices[day.ticker] = day.candles_1m[-1].close
+
+    # Build strategy entries
+    strategy_entries = [
+        {
+            "tracker_id": t.id,
+            "name": t.name,
+            "started_at": t.started_at.isoformat() if t.started_at else None,
+            "config": t.config_json or {},
+        }
+        for t in trackers
+    ]
+
+    # Evaluate all strategies concurrently (up to 15 via semaphore)
+    tasks = [
+        _eval_strategy(entry, catalyst_days, entry_time_et, entry_time_il)
+        for entry in strategy_entries
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    signals: list[dict] = []
+    for r in results:
+        if isinstance(r, Exception):
+            logger.warning(f"Strategy eval error: {r}")
+        elif isinstance(r, list):
+            signals.extend(r)
+
+    logger.info(f"_fetch_and_signal: {len(signals)} signals, {len(strategy_entries)} strategies for {user_id}")
+    return signals, catalyst_days
+
+
+async def _check_tp_sl_with_days(
+    user_id: str, catalyst_days: list[CatalystDay], db: Session, exit_time_et: str
+) -> int:
+    """Check open signals against latest candle prices (called after full scan)."""
+    today = date.today().isoformat()
+    prefix = f"custom:{user_id}:"
+
+    open_trades = (
+        db.query(PaperTrade)
+        .filter(
+            PaperTrade.strategy_id.like(f"{prefix}%"),
+            PaperTrade.trade_date == today,
+            PaperTrade.status == "open",
+        )
+        .all()
+    )
+    if not open_trades:
+        return 0
+
+    latest: dict[str, float] = {
+        day.ticker: day.candles_1m[-1].close
+        for day in catalyst_days
+        if day.candles_1m
+    }
+    closed = 0
+
+    for trade in open_trades:
+        price = latest.get(trade.ticker)
+        if price is None:
+            continue
+
+        hit_tp = trade.tp_price is not None and price >= trade.tp_price
+        hit_sl = trade.sl_price is not None and price <= trade.sl_price
+
+        if not hit_tp and not hit_sl:
+            continue
+
+        if hit_tp and (not hit_sl or trade.tp_price <= trade.sl_price):  # type: ignore[operator]
+            raw_exit = trade.tp_price
+            trade.status = "win"
+            trade.exit_reason = "TP"
+        else:
+            raw_exit = trade.sl_price
+            trade.status = "loss"
+            trade.exit_reason = "SL"
+
+        actual_exit = _apply_exit(raw_exit, 0.0)
+        trade.exit_price = actual_exit
+        trade.exit_time = exit_time_et
+        trade.hold_minutes = _hold_minutes(trade.entry_time_et, exit_time_et)
+        trade.return_pct = round(
+            (actual_exit - trade.entry_price) / trade.entry_price * 100, 2
+        )
+        trade.dollars_gain = round(
+            (actual_exit - trade.entry_price) / trade.entry_price * POSITION_DOLLARS, 2
+        )
+        closed += 1
+
+    if closed:
+        db.commit()
+        logger.info(f"_check_tp_sl_with_days: closed {closed} signals for {user_id}")
+    return closed
+
+
+# ─── Strategy management ─────────────────────────────────────────────────────
+
+async def activate_strategy(user_id: str, strategy: dict, db: Session) -> str:
+    name = strategy.get("name", "Unnamed Strategy")
     existing = (
         db.query(StrategyTracker)
-        .filter(
-            StrategyTracker.user_id == user_id,
-            StrategyTracker.name == name,
-        )
+        .filter(StrategyTracker.user_id == user_id, StrategyTracker.name == name)
         .first()
     )
-
     if existing:
         existing.is_active = True
         existing.config_json = strategy
         existing.started_at = datetime.utcnow()
         db.commit()
         db.refresh(existing)
-        logger.info(f"Re-activated strategy '{name}' for user {user_id} (id={existing.id})")
+        logger.info(f"Re-activated '{name}' for {user_id} (id={existing.id})")
         return existing.id
 
     tracker = StrategyTracker(
@@ -149,43 +626,28 @@ async def activate_strategy(user_id: str, strategy: dict, db: Session) -> str:
     db.add(tracker)
     db.commit()
     db.refresh(tracker)
-    logger.info(f"Activated new strategy '{name}' for user {user_id} (id={tracker.id})")
+    logger.info(f"Activated '{name}' for {user_id} (id={tracker.id})")
     return tracker.id
 
 
 async def deactivate_strategy(tracker_id: str, user_id: str, db: Session) -> bool:
-    """
-    Set is_active=False for the given tracker.
-    Returns True if the tracker was found and updated, False otherwise.
-    """
     tracker = (
         db.query(StrategyTracker)
-        .filter(
-            StrategyTracker.id == tracker_id,
-            StrategyTracker.user_id == user_id,
-        )
+        .filter(StrategyTracker.id == tracker_id, StrategyTracker.user_id == user_id)
         .first()
     )
     if not tracker:
         return False
-
     tracker.is_active = False
     db.commit()
-    logger.info(f"Deactivated strategy tracker {tracker_id} for user {user_id}")
+    logger.info(f"Deactivated tracker {tracker_id} for {user_id}")
     return True
 
 
 def get_active_strategies(user_id: str, db: Session) -> list[dict]:
-    """
-    Return a list of active strategy configs with their tracker IDs.
-    Each element: {"tracker_id": str, "config": dict}
-    """
     trackers = (
         db.query(StrategyTracker)
-        .filter(
-            StrategyTracker.user_id == user_id,
-            StrategyTracker.is_active == True,  # noqa: E712
-        )
+        .filter(StrategyTracker.user_id == user_id, StrategyTracker.is_active == True)  # noqa: E712
         .order_by(StrategyTracker.started_at.desc())
         .all()
     )
@@ -201,10 +663,6 @@ def get_active_strategies(user_id: str, db: Session) -> list[dict]:
 
 
 def _get_ibkr_gateway_url(user_id: str, db: Session) -> Optional[str]:
-    """
-    Return the IBKR gateway URL for the user's first connected IBKR broker,
-    or None if they have no connected IBKR connection.
-    """
     from app.models.db_models import BrokerConnection
     from app.core.broker_manager import decrypt_credentials
 
@@ -224,187 +682,14 @@ def _get_ibkr_gateway_url(user_id: str, db: Session) -> Optional[str]:
         creds = decrypt_credentials(conn.credentials_enc)
         return creds.get("gateway_url") or None
     except Exception as exc:
-        logger.debug(f"_get_ibkr_gateway_url: could not decrypt credentials: {exc}")
+        logger.debug(f"_get_ibkr_gateway_url: could not decrypt: {exc}")
         return None
 
 
-async def scan_and_signal(
-    user_id: str, db: Session
-) -> tuple[list[dict], list[CatalystDay]]:
-    """
-    Main scanner: for each active strategy, fetch the latest market data
-    and check whether entry conditions are met.
-
-    Data source priority:
-      1. IBKR Client Portal (real-time) — if user has a connected IBKR broker
-      2. Polygon.io (15-min delayed) — fallback when IBKR unavailable
-      3. Mock data — fallback when Polygon key is missing or both fail
-
-    Returns (signals, catalyst_days) so the caller can reuse prices for TP/SL checks.
-    """
-    from app.core.config import get_settings
-    from app.core.backtest_engine import _apply_filters, _candles_to_df, _detect_entry_signal
-    from app.models.schemas import StrategyConfig
-
-    active = get_active_strategies(user_id, db)
-    if not active:
-        logger.info(f"No active strategies for user {user_id}")
-        return [], []
-
-    settings = get_settings()
-    catalyst_days: list[CatalystDay] = []
-
-    # ── 1. Try IBKR real-time data ────────────────────────────────────────────
-    ibkr_gateway_url = _get_ibkr_gateway_url(user_id, db)
-    if ibkr_gateway_url:
-        try:
-            from app.data.ibkr_provider import get_ibkr_movers
-            ibkr_days = await get_ibkr_movers(ibkr_gateway_url)
-            if ibkr_days:
-                catalyst_days = ibkr_days
-                logger.info(f"scan_and_signal: using IBKR real-time data ({len(ibkr_days)} movers) for user {user_id}")
-        except Exception as exc:
-            logger.warning(f"scan_and_signal: IBKR provider failed: {exc}")
-
-    # ── 2. Fall back to Polygon (delayed) if IBKR gave nothing ───────────────
-    if not catalyst_days:
-        try:
-            if settings.use_mock_data or not settings.polygon_api_key:
-                from app.data.mock_provider import generate_catalyst_days
-                catalyst_days = generate_catalyst_days(lookback_years=1)
-                logger.info(f"scan_and_signal: using mock data for user {user_id}")
-            else:
-                from app.data.polygon_provider import get_catalyst_days, get_todays_movers
-                catalyst_days = get_catalyst_days(lookback_years=1, api_key=settings.polygon_api_key)
-                try:
-                    todays = get_todays_movers(api_key=settings.polygon_api_key)
-                    catalyst_days = todays + catalyst_days
-                    logger.info(f"scan_and_signal: using Polygon (delayed) + {len(todays)} live movers for user {user_id}")
-                except Exception as exc:
-                    logger.warning(f"scan_and_signal: could not fetch today's Polygon movers: {exc}")
-        except Exception as exc:
-            logger.error(f"scan_and_signal: failed to fetch catalyst days: {exc}")
-            return [], []
-
-    signals: list[dict] = []
-
-    for entry in active:
-        config_dict = entry.get("config") or {}
-        strategy_name = entry.get("name", config_dict.get("name", "Unknown"))
-
-        try:
-            strategy = StrategyConfig(**config_dict)
-        except Exception as exc:
-            logger.warning(f"scan_and_signal: invalid config for '{strategy_name}': {exc}")
-            continue
-
-        filtered_days = _apply_filters(catalyst_days, strategy)
-
-        for day in filtered_days:
-            if not day.candles_1m:
-                continue
-            try:
-                df = _candles_to_df(day.candles_1m)
-                signal = _detect_entry_signal(df, strategy)
-                if signal is None:
-                    continue
-
-                _entry_minute, entry_price = signal
-                signals.append(
-                    {
-                        "strategy_name": strategy_name,
-                        "ticker": day.ticker,
-                        "entry_price": round(entry_price, 4),
-                        "catalyst_type": day.catalyst_type,
-                        "rvol": round(day.rvol, 1),
-                        "trade_date": str(day.date),
-                    }
-                )
-            except Exception as exc:
-                logger.warning(
-                    f"scan_and_signal: error processing {day.ticker}/{day.date} "
-                    f"for '{strategy_name}': {exc}"
-                )
-                continue
-
-    logger.info(
-        f"scan_and_signal: {len(signals)} signals across "
-        f"{len(active)} active strategies for user {user_id}"
-    )
-    return signals, catalyst_days
-
-
-async def _check_tp_sl(user_id: str, catalyst_days: list[CatalystDay], db: Session) -> int:
-    """
-    Check all open signals for this user against the latest candle prices.
-    Closes signals that have hit TP (win) or SL (loss).
-    Returns count of newly closed signals.
-    """
-    today = date.today().isoformat()
-    prefix = f"custom:{user_id}:"
-
-    open_trades = (
-        db.query(PaperTrade)
-        .filter(
-            PaperTrade.strategy_id.like(f"{prefix}%"),
-            PaperTrade.trade_date == today,
-            PaperTrade.status == "open",
-        )
-        .all()
-    )
-    if not open_trades:
-        return 0
-
-    # Latest close price for each ticker in today's market data
-    latest_price: dict[str, float] = {
-        day.ticker: day.candles_1m[-1].close
-        for day in catalyst_days
-        if day.candles_1m
-    }
-
-    now_utc = datetime.now(timezone.utc)
-    exit_time_et = f"{(now_utc.hour + ET_UTC_OFFSET) % 24:02d}:{now_utc.minute:02d}"
-    closed = 0
-
-    for trade in open_trades:
-        price = latest_price.get(trade.ticker)
-        if price is None:
-            continue
-
-        if trade.tp_price and price >= trade.tp_price:
-            trade.exit_price = trade.tp_price
-            trade.status = "win"
-            trade.exit_reason = "take_profit"
-        elif trade.sl_price and price <= trade.sl_price:
-            trade.exit_price = trade.sl_price
-            trade.status = "loss"
-            trade.exit_reason = "stop_loss"
-        else:
-            continue
-
-        trade.exit_time = exit_time_et
-        trade.return_pct = round(
-            (trade.exit_price - trade.entry_price) / trade.entry_price * 100, 2
-        )
-        trade.dollars_gain = round(
-            (trade.exit_price - trade.entry_price) / trade.entry_price * POSITION_DOLLARS, 2
-        )
-        closed += 1
-
-    if closed:
-        db.commit()
-        logger.info(f"_check_tp_sl: closed {closed} signals for user {user_id}")
-    return closed
-
-
 async def eod_close_custom_signals(db: Session) -> int:
-    """
-    EOD job: close all remaining open custom signals as flat.
-    Called by scheduler at 23:05 Israel time (after US market close).
-    """
+    """EOD: close all remaining open custom signals as flat."""
     today = date.today().isoformat()
-    now_utc = datetime.now(timezone.utc)
-    exit_time_et = f"{(now_utc.hour + ET_UTC_OFFSET) % 24:02d}:{now_utc.minute:02d}"
+    exit_et = _et_hhmm()
 
     open_trades = (
         db.query(PaperTrade)
@@ -417,13 +702,35 @@ async def eod_close_custom_signals(db: Session) -> int:
     )
 
     for trade in open_trades:
+        # Exit at last known price (or entry if unknown)
+        raw_exit = _latest_prices.get(trade.ticker, trade.entry_price)
+        actual_exit = _apply_exit(raw_exit, 0.0)
+        trade.exit_price = actual_exit
         trade.status = "flat"
-        trade.exit_reason = "eod_close"
-        trade.exit_time = exit_time_et
-        trade.return_pct = 0.0
-        trade.dollars_gain = 0.0
+        trade.exit_reason = "EOD"
+        trade.exit_time = exit_et
+        trade.hold_minutes = _hold_minutes(trade.entry_time_et, exit_et)
+        trade.return_pct = round(
+            (actual_exit - trade.entry_price) / trade.entry_price * 100, 2
+        )
+        trade.dollars_gain = round(
+            (actual_exit - trade.entry_price) / trade.entry_price * POSITION_DOLLARS, 2
+        )
 
     if open_trades:
         db.commit()
         logger.info(f"eod_close_custom_signals: EOD-closed {len(open_trades)} signals")
     return len(open_trades)
+
+
+# Keep backward-compatible alias used by routes
+async def scan_and_signal(user_id: str, db: Session) -> tuple[list[dict], list[CatalystDay]]:
+    """Backward-compatible wrapper."""
+    trackers_q = (
+        db.query(StrategyTracker)
+        .filter(StrategyTracker.user_id == user_id, StrategyTracker.is_active == True)  # noqa: E712
+        .all()
+    )
+    return await _fetch_and_signal(
+        user_id, trackers_q, None, db, _et_hhmm(), _il_hhmm()
+    )
