@@ -36,10 +36,21 @@ class IBKRBroker(BrokerBase):
         try:
             async with self._client() as c:
                 r = await c.get("/iserver/auth/status")
+                if r.status_code == 401:
+                    return False, "Gateway פעיל — נדרשת כניסה ב-http://localhost:5000"
+                if r.status_code != 200 or not r.text.strip():
+                    return False, f"Gateway החזיר {r.status_code} — ודא שהוא רץ"
                 data = r.json()
                 if data.get("authenticated"):
+                    # also grab account id if not set
+                    if not self.account_id:
+                        acc_r = await c.get("/iserver/accounts")
+                        if acc_r.status_code == 200:
+                            accounts = acc_r.json().get("accounts", [])
+                            if accounts:
+                                self.account_id = accounts[0]
                     return True, f"מחובר — IBKR {self.account_id}"
-                return False, "Gateway פעיל אבל לא מאומת. התחבר דרך הגייטוויי."
+                return False, "Gateway פעיל — נדרשת כניסה ב-http://localhost:5000"
         except Exception as e:
             return False, f"לא ניתן להגיע ל-Gateway: {e}"
 
