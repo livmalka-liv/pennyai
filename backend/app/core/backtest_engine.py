@@ -354,6 +354,76 @@ def _detect_entry_signal(df: pd.DataFrame, strategy: StrategyConfig) -> Optional
     return None
 
 
+def _detect_dagger_signal(df: pd.DataFrame) -> "Optional[tuple[int, float, float]]":
+    """
+    Dagger setup on 1-minute candles:
+      1. 3+ consecutive red candles (the dip)
+      2. At least 1 green bounce candle
+      3. Re-test: a candle whose low breaks below the dip's support
+      4. Reversal: next candle closes GREEN above the support (with any volume)
+    Returns (candle_index, entry_price, stop_price) or None.
+    Stop = 1 cent below the re-test low.
+    Only looks at the last 20 candles so it fires on fresh setups only.
+    """
+    if len(df) < 7:
+        return None
+
+    opens   = df["open"].values
+    closes  = df["close"].values
+    lows    = df["low"].values
+    volumes = df["volume"].values
+    n = len(df)
+
+    # Search only recent candles to avoid entering stale setups
+    for reversal_i in range(max(6, n - 20), n):
+        if closes[reversal_i] <= opens[reversal_i]:
+            continue  # reversal candle must be green
+
+        # Look for a retest candle 1 or 2 bars back
+        for offset in (1, 2):
+            retest_i = reversal_i - offset
+            if retest_i < 4:
+                continue
+
+            # Between retest and dip there should be 1+ green (bounce) candles
+            bounce_end = retest_i - 1
+            bounce_start = bounce_end
+            while bounce_start > 0 and closes[bounce_start] > opens[bounce_start]:
+                bounce_start -= 1
+            if bounce_start == bounce_end:
+                continue  # no green bounce found
+            bounce_start += 1
+
+            # Before the bounce: 3+ consecutive red candles
+            red_end = bounce_start - 1
+            if red_end < 2:
+                continue
+            k, red_count = red_end, 0
+            while k >= 0 and closes[k] < opens[k]:
+                red_count += 1
+                k -= 1
+            if red_count < 3:
+                continue
+
+            support = lows[k + 1:red_end + 1].min()
+
+            # Retest must dip below support; reversal must close above it
+            if lows[retest_i] >= support:
+                continue
+            if closes[reversal_i] <= support:
+                continue
+
+            # Basic volume sanity: reversal not completely dead
+            avg_vol = volumes[max(0, reversal_i - 10):reversal_i].mean() or 1
+            if volumes[reversal_i] < avg_vol * 0.2:
+                continue
+
+            stop_price = round(lows[retest_i] - 0.01, 4)
+            return reversal_i, closes[reversal_i], stop_price
+
+    return None
+
+
 def _simulate_exit(
     df: pd.DataFrame,
     entry_minute: int,

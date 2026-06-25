@@ -319,25 +319,63 @@ async def _eval_strategy(
         loop = asyncio.get_event_loop()
 
         def _cpu_eval() -> list[dict]:
+            from app.models.schemas import RuleType
             filtered = _apply_filters(catalyst_days, strategy)
             results: list[dict] = []
+
+            # Detect Dagger strategy by its entry rule condition
+            is_dagger = any(
+                "dagger" in r.condition.lower()
+                for r in strategy.rules
+                if r.type == RuleType.ENTRY
+            )
+
+            # Dagger trades only between 04:00–13:00 ET (11:00–20:00 IL)
+            if is_dagger:
+                try:
+                    et_h, et_m = int(entry_time_et[:2]), int(entry_time_et[3:])
+                    et_total = et_h * 60 + et_m
+                    if not (4 * 60 <= et_total < 13 * 60):
+                        return []
+                except Exception:
+                    pass
+
             for day in filtered:
                 if not day.candles_1m:
                     continue
                 try:
                     df = _candles_to_df(day.candles_1m)
-                    signal = _detect_entry_signal(df, strategy)
-                    if signal is None:
-                        continue
-                    _entry_min, raw_price = signal
-                    actual_entry = _apply_entry(raw_price, user_slip)
+
+                    if is_dagger:
+                        from app.core.backtest_engine import _detect_dagger_signal
+                        result = _detect_dagger_signal(df)
+                        if result is None:
+                            continue
+                        _entry_min, raw_price, stop_price = result
+                        actual_entry = _apply_entry(raw_price, user_slip)
+                        stop_dist = actual_entry - stop_price
+                        if stop_dist <= 0:
+                            continue
+                        # Dynamic R:R based on stop distance
+                        rr = 4.0 if stop_dist <= 0.15 else (3.0 if stop_dist <= 0.50 else 2.0)
+                        sig_tp_pct = round(rr * stop_dist / actual_entry * 100, 2)
+                        sig_sl_pct = round(stop_dist / actual_entry * 100, 2)
+                    else:
+                        signal = _detect_entry_signal(df, strategy)
+                        if signal is None:
+                            continue
+                        _entry_min, raw_price = signal
+                        actual_entry = _apply_entry(raw_price, user_slip)
+                        sig_tp_pct = tp_pct
+                        sig_sl_pct = sl_pct
+
                     results.append({
                         "strategy_name": strategy_name,
                         "ticker": day.ticker,
                         "raw_entry": round(raw_price, 4),
                         "entry_price": actual_entry,
-                        "tp_pct": tp_pct,
-                        "sl_pct": sl_pct,
+                        "tp_pct": sig_tp_pct,
+                        "sl_pct": sig_sl_pct,
                         "user_slip": user_slip,
                         "catalyst_type": day.catalyst_type,
                         "rvol": round(day.rvol, 1),
@@ -656,7 +694,23 @@ async def _auto_execute_new_signals(
 
         try:
             broker = get_broker(conn.broker_type, conn.credentials_enc)
-            qty = max(1, int(POSITION_DOLLARS / trade.entry_price))
+
+            # Dagger: $15 risk per trade, dynamic qty; daily loss limit $50
+            if "dagger" in trade.strategy_name.lower():
+                from sqlalchemy import func as _func
+                today_pnl = db.query(_func.sum(PaperTrade.dollars_gain)).filter(
+                    PaperTrade.strategy_id.like(f"custom:{uid}:%"),
+                    PaperTrade.trade_date == date.today().isoformat(),
+                    PaperTrade.status.in_(["win", "loss"]),
+                ).scalar() or 0.0
+                if today_pnl <= -50.0:
+                    logger.info(f"auto_execute: Dagger daily loss limit reached for {uid}")
+                    continue
+                stop_dist = trade.entry_price - (trade.sl_price or 0)
+                qty = max(1, int(15.0 / stop_dist)) if stop_dist > 0 else 1
+            else:
+                qty = max(1, int(POSITION_DOLLARS / trade.entry_price))
+
             result = await broker.place_market_order(trade.ticker, "buy", qty)
             logger.info(
                 f"auto_execute: {trade.ticker} x{qty} → {result.status} "
