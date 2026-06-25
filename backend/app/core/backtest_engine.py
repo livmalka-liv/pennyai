@@ -357,63 +357,71 @@ def _detect_entry_signal(df: pd.DataFrame, strategy: StrategyConfig) -> Optional
 def _detect_dagger_signal(df: pd.DataFrame) -> "Optional[tuple[int, float, float]]":
     """
     Dagger setup on 1-minute candles:
-      1. 3+ consecutive red candles (the dip)
-      2. At least 1 green bounce candle
-      3. Re-test: a candle whose low breaks below the dip's support
-      4. Reversal: next candle closes GREEN above the support (with any volume)
+      1. Support = 3+ candles whose Lows are within 2% of each other (same level tested 3x)
+      2. Bounce: at least 1 candle closing clearly above the support zone
+      3. Re-test: a candle whose Low breaks below the support level
+      4. Reversal: next candle closes GREEN above the support = entry
     Returns (candle_index, entry_price, stop_price) or None.
     Stop = 1 cent below the re-test low.
-    Only looks at the last 20 candles so it fires on fresh setups only.
+    Only looks at recent 25 candles so it fires on fresh setups only.
     """
     if len(df) < 7:
         return None
 
-    opens   = df["open"].values
     closes  = df["close"].values
+    opens   = df["open"].values
     lows    = df["low"].values
     volumes = df["volume"].values
     n = len(df)
 
-    # Search only recent candles to avoid entering stale setups
-    for reversal_i in range(max(6, n - 20), n):
+    for reversal_i in range(max(6, n - 25), n):
+        # Reversal candle must be green
         if closes[reversal_i] <= opens[reversal_i]:
-            continue  # reversal candle must be green
+            continue
 
-        # Look for a retest candle 1 or 2 bars back
+        # Retest candle is 1 or 2 bars back
         for offset in (1, 2):
             retest_i = reversal_i - offset
-            if retest_i < 4:
+            if retest_i < 5:
                 continue
 
-            # Between retest and dip there should be 1+ green (bounce) candles
+            # Bounce: 1+ candles between support and retest that closed above support
             bounce_end = retest_i - 1
-            bounce_start = bounce_end
-            while bounce_start > 0 and closes[bounce_start] > opens[bounce_start]:
-                bounce_start -= 1
-            if bounce_start == bounce_end:
-                continue  # no green bounce found
-            bounce_start += 1
-
-            # Before the bounce: 3+ consecutive red candles
-            red_end = bounce_start - 1
-            if red_end < 2:
-                continue
-            k, red_count = red_end, 0
-            while k >= 0 and closes[k] < opens[k]:
-                red_count += 1
-                k -= 1
-            if red_count < 3:
+            if bounce_end < 4:
                 continue
 
-            support = lows[k + 1:red_end + 1].min()
+            # Look backwards from bounce_end for a support zone (3+ candles with similar Lows)
+            # Support zone: any 3 candles in a window of 8 whose Lows are within 2% of each other
+            support = None
+            for window_end in range(bounce_end - 1, max(2, bounce_end - 12), -1):
+                window_start = max(0, window_end - 7)
+                window_lows = lows[window_start:window_end + 1]
+                zone_min = window_lows.min()
+                if zone_min <= 0:
+                    continue
+                # Count candles whose Low is within 2% of the zone floor
+                tolerance = zone_min * 0.02
+                touches = sum(1 for lo in window_lows if lo <= zone_min + tolerance)
+                if touches >= 3:
+                    support = zone_min
+                    break
 
-            # Retest must dip below support; reversal must close above it
+            if support is None:
+                continue
+
+            # Bounce candle must have closed above support (confirmed bounce)
+            if closes[bounce_end] <= support:
+                continue
+
+            # Retest must break below support
             if lows[retest_i] >= support:
                 continue
+
+            # Reversal must close back above support
             if closes[reversal_i] <= support:
                 continue
 
-            # Basic volume sanity: reversal not completely dead
+            # Volume sanity
             avg_vol = volumes[max(0, reversal_i - 10):reversal_i].mean() or 1
             if volumes[reversal_i] < avg_vol * 0.2:
                 continue
