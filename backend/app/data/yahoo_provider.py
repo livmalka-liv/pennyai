@@ -31,7 +31,7 @@ _MIN_VOLUME  = 100_000
 _MAX_TICKERS = 20
 _MIN_CHANGE  = 3.0   # minimum % gain to qualify as a mover
 
-# Known volatile penny stocks — scanned every cycle
+# Known volatile penny stocks — fallback watchlist
 LIVE_WATCHLIST = [
     "AMC", "GME", "CLOV", "FFIE", "MULN", "ATER", "PROG",
     "MARA", "RIOT", "EXPR", "MVIS", "GNUS", "ZOM", "IDEX", "NKLA",
@@ -39,7 +39,28 @@ LIVE_WATCHLIST = [
     "MOXC", "MXCT", "OBLG", "BFRI", "PHUN", "AABB",
     "CTRM", "NAKD", "KOSS", "SNDL", "BB", "NOK", "BBBY",
     "WISH", "HEXO", "PRTY",
+    # user-requested
+    "MEI", "MIMI",
 ]
+
+_SCREENER_URL = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved"
+
+
+async def _fetch_dynamic_movers(client: httpx.AsyncClient) -> list[str]:
+    """Pull Yahoo Finance's live day-gainers screener for additional tickers."""
+    try:
+        r = await client.get(
+            _SCREENER_URL,
+            params={"formatted": "false", "scrIds": "day_gainers", "count": "50", "start": "0"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+        quotes = data.get("finance", {}).get("result", [{}])[0].get("quotes", [])
+        return [q["symbol"] for q in quotes if q.get("symbol")]
+    except Exception as exc:
+        logger.debug(f"dynamic screener failed: {exc}")
+        return []
 
 
 def _current_et_hour() -> int:
@@ -108,8 +129,12 @@ async def get_todays_movers() -> list[CatalystDay]:
     Returns CatalystDay objects ready for strategy evaluation.
     """
     async with httpx.AsyncClient(headers=_HEADERS, timeout=15) as client:
-        # Step 1 — parallel daily-change fetch for all watchlist tickers
-        tasks   = [_fetch_daily_change(client, t) for t in LIVE_WATCHLIST]
+        # Step 1 — merge static watchlist + dynamic Yahoo screener
+        dynamic = await _fetch_dynamic_movers(client)
+        combined = list(dict.fromkeys(LIVE_WATCHLIST + dynamic))  # deduplicate, preserve order
+        logger.info(f"yahoo_provider: scanning {len(combined)} tickers ({len(dynamic)} from screener)")
+
+        tasks   = [_fetch_daily_change(client, t) for t in combined]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         movers: list[dict] = []
