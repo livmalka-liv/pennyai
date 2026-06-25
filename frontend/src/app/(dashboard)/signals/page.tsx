@@ -145,7 +145,7 @@ export default function SignalsPage() {
   async function triggerScan() {
     setScanning(true);
     try {
-      const API = (process.env.NEXT_PUBLIC_API_URL || "https://pennyai-backend-production.up.railway.app/api/v1").replace(/\/$/, "");
+      const API = (process.env.NEXT_PUBLIC_API_URL || "https://backend-production-31a6f.up.railway.app/api/v1").replace(/\/$/, "");
       const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
       await fetch(`${API}/live-strategies/scan`, {
         method: "POST",
@@ -327,24 +327,13 @@ export default function SignalsPage() {
           </div>
         )}
 
-        {/* Broker speed comparison — shows when 2+ brokers are connected */}
+        {/* Broker auto-execute status — shows when strategies are active */}
         {activeStrategies.length > 0 && (
           <div className="mb-5 rounded-xl border border-[#1E293B] bg-[#0D1117] px-4 py-3">
-            <div className="flex items-center gap-2 mb-2">
-              <Timer className="h-3.5 w-3.5 text-[#64748B]" />
-              <span className="text-xs font-semibold text-[#64748B]">השוואת מהירות ביצוע ברוקרים</span>
-            </div>
-            <div className="flex items-center gap-3 text-xs text-[#475569]">
-              <span className="rounded-lg border border-[#1E293B] bg-[#131A26] px-3 py-1.5">
-                IBKR Paper — ברוקר ראשי
-              </span>
-              <span className="text-[#1E293B]">+</span>
-              <span className="rounded-lg border border-dashed border-[#1E293B] px-3 py-1.5 text-[#334155]">
-                ברוקר נוסף — חבר דרך Settings
-              </span>
-              <span className="text-[10px] text-[#334155] mr-auto">
-                השוואה תופעל אוטומטית כשיחוברו 2 ברוקרים ומעלה
-              </span>
+            <div className="flex items-center gap-2">
+              <Zap className="h-3.5 w-3.5 text-[#10B981]" />
+              <span className="text-xs font-semibold text-[#10B981]">סורק פעיל — IBKR Live מחובר עם ביצוע אוטומטי</span>
+              <span className="text-[10px] text-[#475569] mr-auto">עסקאות נשלחות אוטומטית לחשבון U11777393</span>
             </div>
           </div>
         )}
