@@ -89,6 +89,67 @@ def _apply_exit(price: float, user_slip: float) -> float:
 
 # ─── TP / SL from strategy config ────────────────────────────────────────────
 
+def _convert_rule(raw: dict) -> dict:
+    """Convert raw DB rule format {field/operator/value/signal} → StrategyConfig rule {condition/parameters}."""
+    rtype = raw.get("type", "filter")
+
+    if "signal" in raw:
+        sig = raw["signal"]
+        if sig == "hod":
+            return {"type": "entry", "condition": "Break above High of Day", "parameters": {"indicator": "HOD"}}
+        elif sig == "vwap_reclaim":
+            return {"type": "entry", "condition": "VWAP reclaim after consolidation below",
+                    "parameters": {"indicator": "VWAP", "direction": "hold_bounce"}}
+        return {"type": "entry", "condition": sig, "parameters": {}}
+
+    if "field" in raw:
+        field, op, value = raw["field"], raw.get("operator", ""), raw.get("value")
+        if rtype == "exit" and field == "pct":
+            pct = float(value)
+            if pct > 0:
+                return {"type": "exit", "condition": f"Take Profit at +{pct}%", "parameters": {"pct": pct}}
+            return {"type": "exit", "condition": f"Stop Loss at {pct}%", "parameters": {"pct": pct}}
+        if field == "change_pct":
+            v = float(value)
+            return {"type": "filter", "condition": f"Change > {v}%", "parameters": {"minChange": v}}
+        if field == "rvol":
+            v = float(value)
+            return {"type": "filter", "condition": f"Relative Volume > {v}x", "parameters": {"minRvol": v}}
+        if field == "float_shares":
+            v = int(value)
+            return {"type": "filter", "condition": f"Float < {v // 1_000_000}M shares", "parameters": {"maxFloat": v}}
+        if field == "price":
+            if op == "between" and isinstance(value, list):
+                return {"type": "filter", "condition": f"Price ${value[0]}-${value[1]}",
+                        "parameters": {"minPrice": float(value[0]), "maxPrice": float(value[1])}}
+            if op in ("lte", "lt"):
+                return {"type": "filter", "condition": f"Price < ${float(value)}", "parameters": {"maxPrice": float(value)}}
+            return {"type": "filter", "condition": f"Price > ${float(value)}", "parameters": {"minPrice": float(value)}}
+
+    if "condition" in raw:
+        return raw
+    return {"type": rtype, "condition": str(raw.get("field", raw.get("signal", "unknown"))), "parameters": {}}
+
+
+def _unwrap_config(config_dict: dict) -> dict:
+    """Handle both flat/nested formats and convert raw DB rules to StrategyConfig format."""
+    if "strategy" in config_dict and isinstance(config_dict.get("strategy"), dict):
+        config_dict = config_dict["strategy"]
+
+    if "rules" in config_dict and isinstance(config_dict["rules"], list):
+        config_dict = dict(config_dict)
+        config_dict["rules"] = [
+            r if "condition" in r else _convert_rule(r)
+            for r in config_dict["rules"]
+        ]
+
+    if "description" not in config_dict:
+        config_dict = dict(config_dict)
+        config_dict["description"] = config_dict.get("name", "")
+
+    return config_dict
+
+
 def _tp_sl_pct(config_dict: dict) -> tuple[float, float]:
     """
     Parse exit rules from strategy config.
@@ -96,7 +157,7 @@ def _tp_sl_pct(config_dict: dict) -> tuple[float, float]:
     """
     try:
         from app.models.schemas import StrategyConfig, RuleType
-        sc = StrategyConfig(**config_dict)
+        sc = StrategyConfig(**_unwrap_config(config_dict))
         tp_pct, sl_pct = 20.0, 7.0
         for rule in sc.rules:
             if rule.type == RuleType.EXIT:
@@ -113,7 +174,7 @@ def _tp_sl_pct(config_dict: dict) -> tuple[float, float]:
 def _user_slip(config_dict: dict) -> float:
     try:
         from app.models.schemas import StrategyConfig
-        return StrategyConfig(**config_dict).slippage or 0.0
+        return StrategyConfig(**_unwrap_config(config_dict)).slippage or 0.0
     except Exception:
         return 0.0
 
@@ -242,7 +303,7 @@ async def _eval_strategy(
         from app.core.backtest_engine import _apply_filters, _candles_to_df, _detect_entry_signal
         from app.models.schemas import StrategyConfig
 
-        config_dict = entry.get("config") or {}
+        config_dict = _unwrap_config(entry.get("config") or {})
         strategy_name = entry.get("name", config_dict.get("name", "Unknown"))
 
         try:
@@ -253,23 +314,24 @@ async def _eval_strategy(
 
         user_slip = strategy.slippage or 0.0
         tp_pct, sl_pct = _tp_sl_pct(config_dict)
-        filtered = _apply_filters(catalyst_days, strategy)
-        signals = []
 
-        for day in filtered:
-            if not day.candles_1m:
-                continue
-            try:
-                df = _candles_to_df(day.candles_1m)
-                signal = _detect_entry_signal(df, strategy)
-                if signal is None:
+        # Run CPU-bound pandas work in thread pool so it doesn't block the event loop
+        loop = asyncio.get_event_loop()
+
+        def _cpu_eval() -> list[dict]:
+            filtered = _apply_filters(catalyst_days, strategy)
+            results: list[dict] = []
+            for day in filtered:
+                if not day.candles_1m:
                     continue
-
-                _entry_min, raw_price = signal
-                actual_entry = _apply_entry(raw_price, user_slip)
-
-                signals.append(
-                    {
+                try:
+                    df = _candles_to_df(day.candles_1m)
+                    signal = _detect_entry_signal(df, strategy)
+                    if signal is None:
+                        continue
+                    _entry_min, raw_price = signal
+                    actual_entry = _apply_entry(raw_price, user_slip)
+                    results.append({
                         "strategy_name": strategy_name,
                         "ticker": day.ticker,
                         "raw_entry": round(raw_price, 4),
@@ -282,12 +344,12 @@ async def _eval_strategy(
                         "trade_date": str(day.date),
                         "entry_time_et": entry_time_et,
                         "entry_time_il": entry_time_il,
-                    }
-                )
-            except Exception as exc:
-                logger.warning(f"_eval_strategy: {day.ticker}/{day.date} / '{strategy_name}': {exc}")
+                    })
+                except Exception as exc:
+                    logger.warning(f"_eval_strategy: {day.ticker}/{day.date} / '{strategy_name}': {exc}")
+            return results
 
-        return signals
+        return await loop.run_in_executor(None, _cpu_eval)
 
 
 # ─── Price cache refresh (no strategies needed) ───────────────────────────────
@@ -393,9 +455,9 @@ async def evaluate_on_cached_data(db: Session) -> int:
             if exists:
                 continue
             try:
-                actual_entry = sig["entry_price"]
-                tp_pct = sig["tp_pct"]
-                sl_pct = sig["sl_pct"]
+                actual_entry = float(sig["entry_price"])
+                tp_pct = float(sig["tp_pct"])
+                sl_pct = float(sig["sl_pct"])
                 raw_tp = round(actual_entry * (1 + tp_pct / 100), 4)
                 raw_sl = round(actual_entry * (1 - sl_pct / 100), 4)
                 trade = PaperTrade(
@@ -412,7 +474,7 @@ async def evaluate_on_cached_data(db: Session) -> int:
                     status="open",
                     session="regular" if _is_market_open() else "premarket",
                     catalyst=sig.get("catalyst_type"),
-                    rvol=sig.get("rvol"),
+                    rvol=float(sig["rvol"]) if sig.get("rvol") is not None else None,
                     variant="custom",
                 )
                 db.add(trade)
@@ -519,9 +581,9 @@ async def scan_and_save_signals(db: Session, user_id: Optional[str] = None, forc
             if existing:
                 continue
 
-            actual_entry = sig["entry_price"]
-            tp_pct = sig["tp_pct"]
-            sl_pct = sig["sl_pct"]
+            actual_entry = float(sig["entry_price"])
+            tp_pct = float(sig["tp_pct"])
+            sl_pct = float(sig["sl_pct"])
 
             raw_tp = round(actual_entry * (1 + tp_pct / 100), 4)
             raw_sl = round(actual_entry * (1 - sl_pct / 100), 4)
@@ -540,7 +602,7 @@ async def scan_and_save_signals(db: Session, user_id: Optional[str] = None, forc
                 status="open",
                 session="regular" if _is_market_open() else "premarket",
                 catalyst=sig.get("catalyst_type"),
-                rvol=sig.get("rvol"),
+                rvol=float(sig["rvol"]) if sig.get("rvol") is not None else None,
                 variant="custom",
             )
             db.add(trade)
@@ -639,17 +701,16 @@ async def _fetch_and_signal(
     if not catalyst_days:
         try:
             if not settings.use_mock_data and settings.polygon_api_key:
-                from app.data.polygon_provider import get_catalyst_days, get_todays_movers
+                from app.data.polygon_provider import get_todays_movers
                 try:
-                    catalyst_days = get_catalyst_days(1, settings.polygon_api_key)
-                    data_source = "polygon"
+                    # Only use today's movers from Polygon (quick REST call)
+                    # Skip get_catalyst_days — it triggers a blocking 30-day backfill
+                    polygon_days = get_todays_movers(settings.polygon_api_key)
+                    if polygon_days:
+                        catalyst_days = polygon_days
+                        data_source = "polygon"
                 except Exception as exc:
-                    logger.warning(f"Polygon historical fetch failed for {user_id}: {exc}")
-                if catalyst_days:
-                    try:
-                        catalyst_days = get_todays_movers(settings.polygon_api_key) + catalyst_days
-                    except Exception:
-                        pass
+                    logger.debug(f"Polygon movers failed for {user_id}: {exc}")
         except Exception as exc:
             logger.warning(f"Polygon setup failed for {user_id}: {exc}")
 
@@ -665,12 +726,10 @@ async def _fetch_and_signal(
         except Exception as exc:
             logger.warning(f"Yahoo Finance provider failed for {user_id}: {exc}")
 
-    # Always fall back to mock if no real data available
+    # No real market data — skip rather than blocking the event loop with mock data
     if not catalyst_days:
-        from app.data.mock_provider import generate_catalyst_days
-        catalyst_days = generate_catalyst_days(lookback_years=1)
-        data_source = "mock"
-        logger.info(f"Using mock data for {user_id} (no real data available)")
+        logger.debug(f"No real market data for {user_id}, scan skipped")
+        return [], []
 
     _last_data_source = data_source
 
