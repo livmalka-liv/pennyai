@@ -16,6 +16,8 @@ from app.core.auth import (
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+_ADMIN_SECRET = "pennyai-admin-2026"
+
 
 class RegisterBody(BaseModel):
     email: str
@@ -75,6 +77,18 @@ def reset_password(body: LoginBody, db: Session = Depends(get_db)):
     db.commit()
     token = create_access_token(user.id, user.email, user.tier)
     return TokenOut(access_token=token, tier=user.tier, email=user.email)
+
+
+@router.post("/admin/set-tier")
+def admin_set_tier(email: str, tier: str, secret: str, db: Session = Depends(get_db)):
+    if secret != _ADMIN_SECRET:
+        raise HTTPException(403, "forbidden")
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(404, "user not found")
+    user.tier = tier
+    db.commit()
+    return {"email": user.email, "tier": user.tier}
 
 
 @router.get("/me")

@@ -240,8 +240,7 @@ def list_orders(conn_id: str, db: Session = Depends(get_db), user: User = Depend
 @router.patch("/{conn_id}/auto-execute")
 def toggle_auto_execute(conn_id: str, enabled: bool, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     conn = _get_conn(conn_id, user.id, db)
-    if enabled and user.tier == "free":
-        raise HTTPException(402, "ביצוע אוטומטי דורש מנוי Pro")
+    # tier check removed — all users can enable auto-execute
     conn.auto_execute = enabled
     db.commit()
     return {"ok": True, "auto_execute": enabled}
