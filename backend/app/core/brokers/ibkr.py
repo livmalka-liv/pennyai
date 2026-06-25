@@ -28,7 +28,9 @@ class IBKRBroker(BrokerBase):
         self.account_id = credentials.get("account_id", "")
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(base_url=f"{self.base}/v1/api", verify=False, timeout=10)
+        # ngrok-skip-browser-warning bypasses ngrok's interstitial page for API calls
+        headers = {"ngrok-skip-browser-warning": "true", "User-Agent": "PennyAI/1.0"}
+        return httpx.AsyncClient(base_url=f"{self.base}/v1/api", verify=False, timeout=10, headers=headers)
 
     async def test_connection(self) -> tuple[bool, str]:
         try:
