@@ -356,78 +356,86 @@ def _detect_entry_signal(df: pd.DataFrame, strategy: StrategyConfig) -> Optional
 
 def _detect_dagger_signal(df: pd.DataFrame) -> "Optional[tuple[int, float, float]]":
     """
-    Dagger setup on 1-minute candles:
-      1. Support = 3+ candles whose Lows are within 2% of each other (same level tested 3x)
-      2. Bounce: at least 1 candle closing clearly above the support zone
-      3. Re-test: a candle whose Low breaks below the support level
-      4. Reversal: next candle closes GREEN above the support = entry
-    Returns (candle_index, entry_price, stop_price) or None.
-    Stop = 1 cent below the re-test low.
-    Only looks at recent 25 candles so it fires on fresh setups only.
+    Dagger (Livmalka) setup on 1-minute candles:
+      1. BASE: 3+ candles whose Lows cluster at the same level (U-shape, within 1.5%)
+      2. SPIKE: at least 1 candle that rallies significantly above the base (≥2% above support)
+      3. PULLBACK: price returns to the support zone (Low touches back within 1.5% of support)
+      4. REJECTION: a green 1-minute candle that bounces off support and closes above it = entry
+    Entry = close of the rejection candle.
+    Stop  = 1 cent below the support level (base low).
+    Only checks the last 30 candles to fire on fresh setups only.
     """
     if len(df) < 7:
         return None
 
     closes  = df["close"].values
     opens   = df["open"].values
+    highs   = df["high"].values
     lows    = df["low"].values
     volumes = df["volume"].values
     n = len(df)
 
-    for reversal_i in range(max(6, n - 25), n):
-        # Reversal candle must be green
-        if closes[reversal_i] <= opens[reversal_i]:
+    # Search for rejection candle in the recent window
+    for rejection_i in range(max(6, n - 30), n):
+        # Rejection candle must be green (closes above open)
+        if closes[rejection_i] <= opens[rejection_i]:
             continue
 
-        # Retest candle is 1 or 2 bars back
-        for offset in (1, 2):
-            retest_i = reversal_i - offset
-            if retest_i < 5:
+        # Pullback candle: 1 or 2 bars before rejection, Low must touch support zone
+        for pb_offset in (1, 2):
+            pullback_i = rejection_i - pb_offset
+            if pullback_i < 4:
                 continue
 
-            # Bounce: 1+ candles between support and retest that closed above support
-            bounce_end = retest_i - 1
-            if bounce_end < 4:
-                continue
+            # Between base and pullback there must be at least 1 spike candle
+            # (a candle closing well above support)
+            # Search backwards from pullback_i for the base
+            base_found = False
+            support = 0.0
 
-            # Look backwards from bounce_end for a support zone (3+ candles with similar Lows)
-            # Support zone: any 3 candles in a window of 8 whose Lows are within 2% of each other
-            support = None
-            for window_end in range(bounce_end - 1, max(2, bounce_end - 12), -1):
-                window_start = max(0, window_end - 7)
-                window_lows = lows[window_start:window_end + 1]
+            for base_end in range(pullback_i - 1, max(1, pullback_i - 20), -1):
+                base_start = max(0, base_end - 9)
+                window_lows = lows[base_start:base_end + 1]
                 zone_min = window_lows.min()
                 if zone_min <= 0:
                     continue
-                # Count candles whose Low is within 2% of the zone floor
-                tolerance = zone_min * 0.02
-                touches = sum(1 for lo in window_lows if lo <= zone_min + tolerance)
-                if touches >= 3:
-                    support = zone_min
-                    break
 
-            if support is None:
+                # 3+ candles within 1.5% of the zone floor = proven support
+                tol = zone_min * 0.015
+                touches = sum(1 for lo in window_lows if lo <= zone_min + tol)
+                if touches < 3:
+                    continue
+
+                # Spike: at least 1 candle between base_end and pullback_i that closed ≥2% above support
+                spike_exists = any(
+                    closes[i] >= zone_min * 1.02
+                    for i in range(base_end + 1, pullback_i)
+                )
+                if not spike_exists:
+                    continue
+
+                # Pullback must return to support zone (Low within 1.5% of support)
+                if lows[pullback_i] > zone_min * 1.015:
+                    continue
+
+                support = zone_min
+                base_found = True
+                break
+
+            if not base_found:
                 continue
 
-            # Bounce candle must have closed above support (confirmed bounce)
-            if closes[bounce_end] <= support:
+            # Rejection candle must close above support (bounce confirmed)
+            if closes[rejection_i] <= support:
                 continue
 
-            # Retest must break below support
-            if lows[retest_i] >= support:
+            # Volume: rejection candle not completely silent
+            avg_vol = volumes[max(0, rejection_i - 10):rejection_i].mean() or 1
+            if volumes[rejection_i] < avg_vol * 0.25:
                 continue
 
-            # Reversal must close back above support
-            if closes[reversal_i] <= support:
-                continue
-
-            # Volume sanity
-            avg_vol = volumes[max(0, reversal_i - 10):reversal_i].mean() or 1
-            if volumes[reversal_i] < avg_vol * 0.2:
-                continue
-
-            stop_price = round(lows[retest_i] - 0.01, 4)
-            return reversal_i, closes[reversal_i], stop_price
+            stop_price = round(support - 0.01, 4)
+            return rejection_i, closes[rejection_i], stop_price
 
     return None
 
