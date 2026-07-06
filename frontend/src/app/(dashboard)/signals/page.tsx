@@ -578,10 +578,30 @@ export default function SignalsPage() {
                           return (
                             <tr key={sig.id} className="hover:bg-[#131A26]/60 transition-colors">
                               <td className="px-4 py-3 text-right">
-                                <span className="font-bold text-[#F8FAFC] text-sm">{sig.ticker}</span>
-                                {sig.rvol != null && (
-                                  <span className="ml-1.5 text-[10px] text-[#475569]">RVOL {sig.rvol.toFixed(1)}x</span>
-                                )}
+                                <div className="flex items-center gap-2 justify-end">
+                                  <span className="font-bold text-[#F8FAFC] text-sm">{sig.ticker}</span>
+                                  {sig.rvol != null && (
+                                    <span className="text-[10px] text-[#475569]">RVOL {sig.rvol.toFixed(1)}x</span>
+                                  )}
+                                  <a
+                                    href={`http://localhost:8765/${sig.trade_date}/${(sig.status ?? "open").toUpperCase()}/${sig.ticker}_${(sig.entry_time_et ?? "").replace(":", "-")}_clip.mp4`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title="צפה בסרטון העסקה"
+                                    className="rounded bg-[#6366F1]/20 border border-[#6366F1]/30 px-1.5 py-0.5 text-[10px] text-[#6366F1] hover:bg-[#6366F1]/40 transition-colors"
+                                  >
+                                    📹
+                                  </a>
+                                  <a
+                                    href={`https://www.tradingview.com/chart/?symbol=${sig.ticker}&interval=1`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title="גרף חי ב-TradingView"
+                                    className="rounded bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 text-[10px] text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                                  >
+                                    📊
+                                  </a>
+                                </div>
                               </td>
                               <td className="px-4 py-3 text-right text-[#64748B] max-w-[140px] truncate">{sig.strategy_name}</td>
                               <td className="px-4 py-3 text-center font-mono text-[#94A3B8]">
