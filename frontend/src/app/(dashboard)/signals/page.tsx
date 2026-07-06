@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { RefreshCw, Zap, TrendingUp, TrendingDown, Clock, AlertCircle, Calendar, X, Timer } from "lucide-react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { RefreshCw, Zap, TrendingUp, TrendingDown, Clock, AlertCircle, Calendar, X, Bell } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getMySignals, getActiveStrategies, deactivateStrategy, getScanStatus, type SignalRow, type ActiveStrategy, type ScanStatus } from "@/lib/api";
 
@@ -78,6 +78,9 @@ export default function SignalsPage() {
   const [removing, setRemoving] = useState<string | null>(null);
   const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
   const [showTickers, setShowTickers] = useState(false);
+  const [newAlerts, setNewAlerts] = useState<SignalRow[]>([]);
+  const knownIds = useRef<Set<string>>(new Set());
+  const notifEnabled = useRef(false);
 
   const loadScanStatus = useCallback(async () => {
     try {
@@ -111,8 +114,23 @@ export default function SignalsPage() {
         : preset === "today"
           ? { days: 1 }
           : { days: Number(preset) };
-      const data = await getMySignals(params);
-      setSignals(Array.isArray(data) ? data : []);
+      const data: SignalRow[] = Array.isArray(await getMySignals(params)) ? await getMySignals(params) : [];
+      // Detect brand-new signals
+      const fresh = data.filter(s => !knownIds.current.has(s.id));
+      if (fresh.length > 0 && knownIds.current.size > 0) {
+        setNewAlerts(prev => [...fresh, ...prev].slice(0, 5));
+        if (notifEnabled.current && typeof Notification !== "undefined" && Notification.permission === "granted") {
+          fresh.forEach(s => {
+            new Notification(`🗡️ Dagger — ${s.ticker}`, {
+              body: `כניסה $${s.entry_price} · TP $${s.tp_price?.toFixed(2)} · SL $${s.sl_price?.toFixed(2)}`,
+              icon: "/favicon.ico",
+            });
+          });
+        }
+      }
+      fresh.forEach(s => knownIds.current.add(s.id));
+      data.forEach(s => knownIds.current.add(s.id));
+      setSignals(data);
       setLastRefresh(new Date());
     } catch {
       setSignals([]);
@@ -120,6 +138,13 @@ export default function SignalsPage() {
       setLoading(false);
     }
   }, [preset, fromDate, toDate, useCustom]);
+
+  function enableNotifications() {
+    if (typeof Notification === "undefined") return;
+    Notification.requestPermission().then(p => {
+      notifEnabled.current = p === "granted";
+    });
+  }
 
   useEffect(() => {
     load();
@@ -245,6 +270,15 @@ export default function SignalsPage() {
             )}
 
             <button
+              onClick={enableNotifications}
+              className="flex items-center gap-2 rounded-lg border border-yellow-400/30 bg-yellow-400/10 px-4 py-2 text-sm font-medium text-yellow-400 hover:bg-yellow-400/20 transition-all"
+              title="הפעל התראות דפדפן"
+            >
+              <Bell className="h-4 w-4" />
+              התראות
+            </button>
+
+            <button
               onClick={triggerScan}
               disabled={scanning || loading}
               className="flex items-center gap-2 rounded-lg border border-[#6366F1]/30 bg-[#6366F1]/10 px-4 py-2 text-sm font-medium text-[#6366F1] hover:bg-[#6366F1]/20 disabled:opacity-50 transition-all"
@@ -284,6 +318,29 @@ export default function SignalsPage() {
                 הבורסה תיפתח ב-{scanStatus.market_opens_israel} שעון ישראל — הסורק אוסף נתוני pre-market
               </p>
             )}
+          </div>
+        )}
+
+        {/* Live alert feed */}
+        {newAlerts.length > 0 && (
+          <div className="mb-4 space-y-2">
+            {newAlerts.map(s => (
+              <div key={s.id} className="flex items-center justify-between rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 animate-pulse-once">
+                <div className="flex items-center gap-3">
+                  <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="font-bold text-emerald-400 text-sm">🗡️ כניסה חדשה — {s.ticker}</span>
+                  <span className="text-xs text-[#94A3B8]">{s.entry_time_et} ET</span>
+                </div>
+                <div className="flex items-center gap-4 text-xs font-mono">
+                  <span className="text-[#F8FAFC]">כניסה <strong>${s.entry_price.toFixed(2)}</strong></span>
+                  <span className="text-emerald-400">TP ${s.tp_price?.toFixed(2)}</span>
+                  <span className="text-rose-400">SL ${s.sl_price?.toFixed(2)}</span>
+                  <button onClick={() => setNewAlerts(a => a.filter(x => x.id !== s.id))} className="text-[#475569] hover:text-white">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
