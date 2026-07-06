@@ -125,9 +125,13 @@ export default function SignalsPage() {
     load();
     loadActiveStrategies();
     loadScanStatus();
-    // Refresh scan status every 30 seconds
-    const interval = setInterval(loadScanStatus, 30_000);
-    return () => clearInterval(interval);
+    // Refresh scan status every 15s, trades every 15s (real-time feed)
+    const statusInterval = setInterval(loadScanStatus, 15_000);
+    const tradesInterval = setInterval(load, 15_000);
+    return () => {
+      clearInterval(statusInterval);
+      clearInterval(tradesInterval);
+    };
   }, [load, loadActiveStrategies, loadScanStatus]);
 
   function applyPreset(p: Preset) {
