@@ -27,6 +27,7 @@ export function parseToken(token: string): TokenPayload | null {
     const b64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
     const payload = JSON.parse(atob(b64));
     if (!payload.sub || !payload.email) return null;
+    if (payload.exp && payload.exp * 1000 < Date.now()) return null;
     return { id: payload.sub, email: payload.email, tier: payload.tier ?? "free" };
   } catch {
     return null;
