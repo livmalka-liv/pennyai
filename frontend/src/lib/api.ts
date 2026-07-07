@@ -1,7 +1,7 @@
 import type { BacktestResult, StrategyConfig } from "@/types";
 import { authHeader } from "@/lib/auth";
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "https://pennyai-backend-production.up.railway.app/api/v1").replace(/\/$/, "");
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "https://backend-production-31a6f.up.railway.app/api/v1").replace(/\/$/, "");
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -285,7 +285,7 @@ export interface ScanStatus {
 
 export async function getScanStatus(): Promise<ScanStatus> {
   // Use public endpoint (no auth) so status shows even before login
-  const API_BASE_RAW = (process.env.NEXT_PUBLIC_API_URL || "https://pennyai-backend-production.up.railway.app/api/v1").replace(/\/$/, "");
+  const API_BASE_RAW = (process.env.NEXT_PUBLIC_API_URL || "https://backend-production-31a6f.up.railway.app/api/v1").replace(/\/$/, "");
   const base = API_BASE_RAW.replace(/\/api\/v1$/, "");
   const res = await fetch(`${base}/api/v1/market-clock`);
   if (!res.ok) throw new Error("scan status failed");
@@ -306,4 +306,67 @@ export async function createCheckout(tier: string, billing: "monthly" | "yearly"
 
 export async function getBillingPortal() {
   return apiFetch<{ url: string }>("/stripe/portal");
+}
+
+// ── Paper Trading Lab ─────────────────────────────────────────────────────────
+
+export interface PaperTradeStat {
+  name: string;
+  wins: number;
+  losses: number;
+  open: number;
+  total_trades: number;
+  win_rate: number;
+  total_pnl: number;
+}
+
+export interface PaperTradeRow {
+  id: string;
+  strategy_name: string;
+  ticker: string;
+  trade_date: string;
+  entry_time_et: string;
+  exit_time: string | null;
+  entry_price: number;
+  tp_price: number | null;
+  sl_price: number | null;
+  exit_price: number | null;
+  exit_reason: string | null;
+  return_pct: number | null;
+  dollars_gain: number | null;
+  hold_minutes: number | null;
+  status: "open" | "win" | "loss" | "flat";
+  catalyst: string | null;
+  rvol: number | null;
+  current_price: number | null;
+  live_pnl: number | null;
+  live_pnl_pct: number | null;
+  slippage_entry_cents: number | null;
+}
+
+export interface PaperDashboard {
+  strategy_stats: PaperTradeStat[];
+  trades: PaperTradeRow[];
+  total_open: number;
+  total_today: number;
+}
+
+export async function getPaperDashboard(days = 30): Promise<PaperDashboard> {
+  return apiFetch<PaperDashboard>(`/live-strategies/paper-dashboard?days=${days}`);
+}
+
+export interface CandleBar {
+  time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export async function getTradeCandles(ticker: string, tradeDate: string): Promise<CandleBar[]> {
+  const data = await apiFetch<{ candles: CandleBar[] }>(
+    `/live-strategies/candles?ticker=${encodeURIComponent(ticker)}&trade_date=${encodeURIComponent(tradeDate)}`
+  );
+  return data.candles ?? [];
 }
