@@ -106,6 +106,7 @@ def start_scheduler():
     loop = asyncio.get_event_loop()
     loop.create_task(_launch_realtime())
     loop.create_task(_continuous_scanner_loop())
+    loop.create_task(_wpattern_scan_loop())
     logger.info("Scheduler started + continuous scanner loop running (11:00–23:00 IL)")
 
 
@@ -120,15 +121,15 @@ async def _launch_realtime():
 async def _continuous_scanner_loop():
     """
     Two-speed loop:
-    - Every 1 second:  TP/SL check + evaluate strategies on cached data  (no network)
-    - Every 5 seconds: full data refresh from Yahoo/IBKR + save new signals
+    - Every 5 seconds:  TP/SL check + strategy eval on cached data (no network)
+    - Every 30 seconds: full data refresh from Yahoo/IBKR + save new signals
     Window: 11:00–23:00 Israel time, Mon–Fri.
     """
     import time as _time
     from app.data.database import SessionLocal
 
     last_data_refresh = 0.0
-    DATA_REFRESH_INTERVAL = 5  # seconds — rate-limit safe for Yahoo Finance
+    DATA_REFRESH_INTERVAL = 30  # seconds — avoids CPU saturation on small instances
 
     while True:
         try:
@@ -142,7 +143,7 @@ async def _continuous_scanner_loop():
             if _is_in_scan_window():
                 now = _time.monotonic()
 
-                # ── Every second: TP/SL + strategy eval on cached data ──────
+                # ── Every 5s: TP/SL + strategy eval on cached data ──────
                 db = SessionLocal()
                 try:
                     await check_tp_sl_fast(db)
@@ -150,7 +151,7 @@ async def _continuous_scanner_loop():
                 finally:
                     db.close()
 
-                # ── Every 5 seconds: fetch fresh data, save new signals ─────
+                # ── Every 30 seconds: fetch fresh data, save new signals ─────
                 if now - last_data_refresh >= DATA_REFRESH_INTERVAL:
                     db = SessionLocal()
                     try:
@@ -164,4 +165,17 @@ async def _continuous_scanner_loop():
         except Exception as exc:
             logger.error(f"Continuous scanner loop error: {exc}")
 
-        await asyncio.sleep(1)
+        await asyncio.sleep(5)
+
+
+async def _wpattern_scan_loop():
+    """Run W-pattern scanner every 60 seconds during market hours (11:00–23:00 IL)."""
+    while True:
+        try:
+            from app.core.multi_strategy_runner import _is_in_scan_window
+            if _is_in_scan_window():
+                from app.core.wpattern_scanner import run_wpattern_scan
+                await run_wpattern_scan()
+        except Exception as exc:
+            logger.error(f"W-pattern scan loop error: {exc}")
+        await asyncio.sleep(60)
