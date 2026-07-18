@@ -442,11 +442,26 @@ export async function triggerWPatternScan(): Promise<{ status: string }> {
 
 // ── Scanner push state ────────────────────────────────────────────────────────
 
+export interface SupportAlert {
+  symbol:       string;
+  price:        number;
+  support:      number;
+  support_name: string;
+  pct_from:     number;
+  approaching:  boolean;
+  all_levels:   Record<string, number>;
+  vol_ratio:    number;
+  rise_vol:     number;
+  fall_vol:     number;
+  session:      string;
+}
+
 export interface ScannerState {
   tickers:   any[];
   shchutot:  any[];
   gal_sheni: any[];
   news:      any[];
+  support:   SupportAlert[];
   status:    Record<string, string>;
   pushed_at: string | null;
 }

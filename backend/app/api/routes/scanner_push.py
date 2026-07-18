@@ -16,6 +16,7 @@ _EMPTY: dict = {
     "shchutot":  [],
     "gal_sheni": [],
     "news":      [],
+    "support":   [],
     "status":    {},
     "pushed_at": None,
 }
@@ -43,6 +44,7 @@ class PushPayload(BaseModel):
     shchutot:  List[Any] = []
     gal_sheni: List[Any] = []
     news:      List[Any] = []
+    support:   List[Any] = []
     status:    dict      = {}
 
 
@@ -53,6 +55,7 @@ async def push_data(payload: PushPayload):
     _state["shchutot"]  = payload.shchutot
     _state["gal_sheni"] = payload.gal_sheni
     _state["news"]      = payload.news
+    _state["support"]   = payload.support
     _state["status"]    = payload.status
     _state["pushed_at"] = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
     _save(_state)

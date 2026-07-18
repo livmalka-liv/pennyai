@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { RefreshCw, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getWPatternState, getOvernightAlerts, getScannerState, type WSignal, type OvernightAlert, type ScannerState } from "@/lib/api";
+import { getWPatternState, getOvernightAlerts, getScannerState, type WSignal, type OvernightAlert, type ScannerState, type SupportAlert } from "@/lib/api";
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 
@@ -15,6 +15,7 @@ const TABS = [
   { id: "news",      label: "📰 חדשות SEC",    color: "text-orange-400" },
   { id: "wpattern",  label: "〽️ W-Pattern",    color: "text-violet-400" },
   { id: "overnight", label: "🌙 Overnight",    color: "text-amber-400" },
+  { id: "support",   label: "🎯 תמיכות",       color: "text-rose-400" },
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -204,6 +205,7 @@ function Overview({ counts, statuses }: { counts: Record<string, number>; status
     { label: "📰 חדשות SEC",  key: "news",      color: "text-orange-400",  href: "/hub" },
     { label: "〽️ W-Pattern",  key: "wpattern",  color: "text-violet-400",  href: "/wpattern" },
     { label: "🌙 Overnight",  key: "overnight", color: "text-amber-400",   href: "/overnight" },
+    { label: "🎯 תמיכות",     key: "support",   color: "text-rose-400",    href: "/hub" },
   ];
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
@@ -232,6 +234,7 @@ export default function HubPage() {
   const [shchutot, setShchutot] = useState<any[]>([]);
   const [galSheni, setGalSheni] = useState<any[]>([]);
   const [news,     setNews]     = useState<any[]>([]);
+  const [support,  setSupport]  = useState<SupportAlert[]>([]);
   const [scanStatus, setScanStatus] = useState<Record<string, string>>({});
 
   // PennyAI data
@@ -248,6 +251,7 @@ export default function HubPage() {
       setShchutot(data.shchutot ?? []);
       setGalSheni(data.gal_sheni ?? []);
       setNews(data.news ?? []);
+      setSupport((data.support ?? []) as SupportAlert[]);
       setScanStatus(data.status ?? {});
       setScannerOnline(data.pushed_at !== null);
     } catch {
@@ -284,6 +288,7 @@ export default function HubPage() {
     news:     news.length,
     wpattern: wSignals.length,
     overnight: overnight.length,
+    support:  support.length,
   };
 
   const totalAlerts = counts.shchutot + counts.galsheni + counts.wpattern + counts.overnight;
@@ -415,9 +420,82 @@ export default function HubPage() {
                   : <Grid>{overnight.map((a, i) => <OvernightCard key={i} alert={a} />)}</Grid>}
               </div>
             )}
+
+            {tab === "support" && (
+              <div>
+                <SectionHeader
+                  title="🎯 תמיכות 50%"
+                  count={support.length}
+                  status={scanStatus["support"]}
+                />
+                <div className="mb-4 rounded-lg border border-[#1E293B] bg-[#0D1117] p-3 text-xs text-[#64748B]">
+                  מניות שהגיעו לרמת 50% של אחד הטווחים (יום קודם / פרי-מרקט / סשן נוכחי)
+                  עם ווליום ירידה ≤ 60% מווליום העליה — ממתינות ל-W-Pattern
+                </div>
+                {support.length === 0
+                  ? <Empty text={scanStatus["support"] || "אין מניות ליד תמיכה כרגע — הסורט רץ כל 5 דקות בשעות המסחר"} />
+                  : <Grid>{support.map((a, i) => <SupportCard key={i} alert={a} />)}</Grid>}
+              </div>
+            )}
           </>
         )}
       </main>
+    </div>
+  );
+}
+
+function SupportCard({ alert: a }: { alert: SupportAlert }) {
+  const distPct = a.pct_from;
+  const volRatio = a.vol_ratio ?? 0;
+  const sessionLabel = a.session === "premarket" ? "פרי-מרקט" : "מרקט";
+  return (
+    <div className="rounded-xl border border-rose-500/30 bg-[#0D1117] p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className="text-lg font-bold text-[#F8FAFC]">{a.symbol}</span>
+          <span className="rounded-full bg-rose-500/10 px-2 py-0.5 text-[10px] font-bold text-rose-400 border border-rose-500/20">
+            {a.support_name}
+          </span>
+          <span className="rounded-full bg-[#1E293B] px-2 py-0.5 text-[10px] text-[#64748B]">
+            {sessionLabel}
+          </span>
+        </div>
+        <span className="text-sm font-bold text-[#F8FAFC]">${a.price.toFixed(3)}</span>
+      </div>
+
+      {/* Price vs support */}
+      <div className="mb-3 grid grid-cols-3 gap-2 text-center text-[10px]">
+        <div>
+          <div className="text-rose-400 font-bold text-sm">${a.support.toFixed(3)}</div>
+          <div className="text-[#475569]">תמיכה</div>
+        </div>
+        <div>
+          <div className={cn("font-bold text-sm", distPct <= 0.5 ? "text-amber-400" : "text-[#94A3B8]")}>
+            {distPct.toFixed(2)}%
+          </div>
+          <div className="text-[#475569]">מרחק</div>
+        </div>
+        <div>
+          <div className={cn("font-bold text-sm", volRatio <= 0.4 ? "text-emerald-400" : "text-amber-400")}>
+            {(volRatio * 100).toFixed(0)}%
+          </div>
+          <div className="text-[#475569]">vol ירידה/עליה</div>
+        </div>
+      </div>
+
+      {/* All levels */}
+      <div className="rounded-lg bg-[#070A0F] p-2 space-y-1">
+        {Object.entries(a.all_levels).map(([name, lvl]) => (
+          <div key={name} className="flex justify-between text-[10px]">
+            <span className="text-[#475569]">{name}</span>
+            <span className="font-mono text-[#94A3B8]">${(lvl as number).toFixed(3)}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-2 text-[10px] text-amber-400/80 font-semibold">
+        {a.approaching ? "⬇️ מתקרב מלמעלה — ממתין ל-W-Pattern" : "⬆️ ניתור מהתמיכה"}
+      </div>
     </div>
   );
 }
