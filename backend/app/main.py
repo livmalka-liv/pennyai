@@ -15,6 +15,7 @@ from app.api.routes.tracker import router as tracker_router
 from app.api.routes.live_strategies import router as live_strategies_router
 from app.api.routes.performance import router as performance_router
 from app.api.routes.wpattern import router as wpattern_router
+from app.api.routes.overnight import router as overnight_router
 from app.core.config import get_settings
 from app.data.database import init_db
 from app.core.scheduler import start_scheduler
@@ -81,6 +82,7 @@ app.include_router(tracker_router, prefix="/api/v1")
 app.include_router(live_strategies_router, prefix="/api/v1")
 app.include_router(performance_router, prefix="/api/v1")
 app.include_router(wpattern_router, prefix="/api/v1")
+app.include_router(overnight_router, prefix="/api/v1")
 
 
 @app.get("/health")
