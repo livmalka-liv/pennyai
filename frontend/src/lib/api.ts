@@ -370,3 +370,103 @@ export async function getTradeCandles(ticker: string, tradeDate: string): Promis
   );
   return data.candles ?? [];
 }
+
+// ── W-Pattern Scanner ────────────────────────────────────────────────────────
+
+export interface WZone {
+  label: string;
+  high: number;
+  low: number;
+  mid: number;
+  target: number;
+  v_run: number;
+  bars: number;
+}
+
+export interface WSignal {
+  ticker: string;
+  zone_key: string;
+  zone_label: string;
+  mid_zone: number;
+  b1_low: number;
+  b1_time: string;
+  apex_high: number;
+  apex_time: string;
+  b2_low: number;
+  b2_time: string;
+  entry: number;
+  sl: number;
+  tp1: number;
+  tp2: number;
+  risk: number;
+  reward: number;
+  rr_ratio: number;
+  triggered: boolean;
+  detected_at: string;
+}
+
+export interface WUniverseItem {
+  ticker: string;
+  gain_pct: number;
+  price: number;
+  rvol: number;
+}
+
+export interface WState {
+  universe: WUniverseItem[];
+  zones: Record<string, Record<string, WZone>>;
+  signals: WSignal[];
+  last_scan: string | null;
+  signal_count: number;
+}
+
+export async function getWPatternState(): Promise<WState> {
+  return apiFetch<WState>("/wpattern/state");
+}
+
+export async function getWPatternSignals(): Promise<{ signals: WSignal[]; signal_count: number; last_scan: string | null }> {
+  return apiFetch("/wpattern/signals");
+}
+
+export async function getWPatternZones(ticker: string): Promise<{ ticker: string; zones: Record<string, WZone> }> {
+  return apiFetch(`/wpattern/zones/${encodeURIComponent(ticker)}`);
+}
+
+export async function getWPatternCandles(ticker: string): Promise<{ ticker: string; candles: CandleBar[] }> {
+  return apiFetch(`/wpattern/candles/${encodeURIComponent(ticker)}`);
+}
+
+export async function triggerWPatternScan(): Promise<{ status: string }> {
+  return apiFetch("/wpattern/scan", { method: "POST" });
+}
+
+// ── Scanner push state ────────────────────────────────────────────────────────
+
+export interface ScannerState {
+  tickers:   any[];
+  shchutot:  any[];
+  gal_sheni: any[];
+  news:      any[];
+  status:    Record<string, string>;
+  pushed_at: string | null;
+}
+
+export async function getScannerState(): Promise<ScannerState> {
+  return apiFetch<ScannerState>("/scanner/state");
+}
+
+// ── Overnight Alerts ─────────────────────────────────────────────────────────
+
+export interface OvernightAlert {
+  ticker: string;
+  hour_str: string;
+  last_hour_vol: number;
+  multiplier: number;
+  price: number | null;
+  baseline: number | null;
+  received_at: string;
+}
+
+export async function getOvernightAlerts(): Promise<{ alerts: OvernightAlert[]; count: number }> {
+  return apiFetch("/overnight/alerts");
+}

@@ -1,5 +1,7 @@
 """Receives pushed data from standalone.py and serves it to the frontend."""
 
+import json
+from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import List, Any
@@ -7,8 +9,9 @@ from datetime import datetime, timezone
 
 router = APIRouter(prefix="/scanner", tags=["scanner"])
 
-# In-memory store
-_state: dict = {
+_STATE_FILE = Path("/tmp/scanner_state.json")
+
+_EMPTY: dict = {
     "tickers":   [],
     "shchutot":  [],
     "gal_sheni": [],
@@ -16,6 +19,23 @@ _state: dict = {
     "status":    {},
     "pushed_at": None,
 }
+
+def _load() -> dict:
+    try:
+        if _STATE_FILE.exists():
+            return json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return dict(_EMPTY)
+
+def _save(s: dict) -> None:
+    try:
+        _STATE_FILE.write_text(json.dumps(s, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+# Load persisted state on startup (survives sleep/wake on same container)
+_state: dict = _load()
 
 
 class PushPayload(BaseModel):
@@ -35,6 +55,7 @@ async def push_data(payload: PushPayload):
     _state["news"]      = payload.news
     _state["status"]    = payload.status
     _state["pushed_at"] = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+    _save(_state)
     return {"status": "ok", "tickers": len(payload.tickers)}
 
 

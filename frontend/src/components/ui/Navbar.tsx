@@ -9,6 +9,7 @@ import { useState, useRef, useEffect } from "react";
 import UpgradeModal from "@/components/ui/UpgradeModal";
 
 const navLinks = [
+  { href: "/hub",       label: "🔭 Hub" },
   { href: "/dashboard", label: "🏠 בית" },
   { href: "/sandbox",  label: "Sandbox" },
   { href: "/library",  label: "Library" },
@@ -23,6 +24,8 @@ const navLinks = [
   { href: "/signals",        label: "⚡ אותות" },
   { href: "/my-lab",         label: "🔬 המעבדה שלי" },
   { href: "/paper-trading",  label: "📊 Paper Lab" },
+  { href: "/wpattern",       label: "〽️ W-Pattern" },
+  { href: "/overnight",      label: "🌙 Overnight" },
 ];
 
 const TIER_LABEL: Record<string, { label: string; color: string; bg: string }> = {
